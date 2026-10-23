@@ -1,248 +1,210 @@
-# Indian Day Trader Skills for Codex
+# Indian Trading Agents for Codex
 
-Modular OpenAI Codex skills for **NSE/BSE stock analysis, historical replay, and paper-trading reports**. Python performs the calculations; Codex can coordinate independent specialist agents to review the same frozen evidence and explain their decisions.
+A paper-trading research toolkit for NSE/BSE equities, with independent Codex specialists and a React dashboard that shows their work.
 
-**Free public Yahoo data is the default; direct NSE website data is available with `--provider nse`. Neither requires a broker account, market-data subscription, or API key. Live order execution is disabled.**
+Python validates market data and calculates indicators, setups, costs and position sizes. Codex runs independent specialist reviews against one frozen snapshot. The dashboard displays their recorded activity and decisions.
 
-The Python CLI runs independently of Codex and makes no AI API calls. Codex access, internet, and hosting are separate. Public data can be delayed, incomplete, or unavailable; continued free access is not guaranteed.
+**Status: experimental research software. Live order execution is disabled. No profitability, real-time-feed or production-readiness claim is made.**
 
-## Features
+> **Data permissions:** the MIT software license does not license exchange data, news or filings. The repository contains captured third-party regression fixtures whose redistribution rights have not been established. Review [release readiness](docs/RELEASE.md) before publishing a copy. NSE website terms restrict automated collection and simulation/data reuse; public accessibility does not establish permission.
 
-- Five-minute intraday analysis and daily historical OHLCV retrieval.
-- Candle-based VWAP, Wilder RSI14, EMA9/EMA21, and relative volume.
-- Opening-range breakout detection using completed candles.
-- Tick-rounded entry, stop, and target levels.
-- Whole-share position sizing in INR with estimated costs and slippage.
-- Historical replay with next-bar entry and conservative exit handling.
-- Yahoo, direct NSE charts, offline CSV, and optional Upstox V3 data providers.
-- Eleven modular specialist skills plus a Codex team coordinator with ten distinct reviewers and a risk veto.
-- Shared, checksummed handoff files; portfolio cash/exposure/daily limits; paper ticket and alert definitions.
-- Seeded 10,000-path scenario analysis when at least 20 complete prior sessions are available.
-- SQLite snapshot archives and deterministic offline numerical replay.
-- Health checks, explicit provider fallback, bounded scheduled jobs and rotated JSON logs.
-- Chronological holdout research with compounded equity, drawdown and slippage stress tests.
-- Configurable sourced holiday calendars, Linux/macOS CI and a non-root Docker image definition.
+## What it does
+
+- Five-minute OHLCV analysis using completed candles and an explicit analysis cutoff.
+- Approximate candle VWAP, Wilder RSI14, EMA9/EMA21 and relative volume.
+- Long-only opening-range breakouts with tick-rounded entry, stop and target levels.
+- Cash-funded whole-share sizing in INR, including estimated charges and slippage.
+- Next-bar historical replay, chronological holdout research and cost stress scenarios.
+- Seeded scenario resampling when at least 20 complete prior sessions are available.
+- Ten independent Codex reviewers, shared evidence files and a final risk veto.
+- A black-themed React dashboard with animated, clickable specialist desks.
+- Snapshot archives, offline numerical replay, data-health checks and bounded scheduled checks.
+
+It does not submit orders, reconcile broker accounts, guarantee fills, discover every listed stock or run a background notification service.
+
+![Animated specialist desks in the black-themed React dashboard](docs/images/agent-desks.png)
+
+*Agent desks reflect recorded states. A completed report can still veto a setup.*
 
 ## Requirements
 
-- Python 3.8 or newer; no third-party Python packages required.
-- Codex for conversational skill use, or a terminal for direct commands.
-- Internet access for online providers. The included fixture works offline.
+| Component | Requirement |
+| --- | --- |
+| Analysis CLI | Python 3.8+; standard library only |
+| Dashboard build | Node.js 20.19+ or 22.12+ and npm |
+| Independent agent team | Codex host exposing native subagent delegation |
+| Online data | Provider access and permission for the intended use |
 
-Run the commands below from your cloned repository's root directory.
+Run commands from the repository root. A virtual environment is optional; the Python runtime has no external package dependencies. Node is needed to build the dashboard, but not to serve an already built frontend.
 
-## Quick start: offline demo
+## 1. Try the offline demo
 
-Start with the included synthetic fixture to verify the complete analysis workflow:
+The bundled `DEMO.NS` fixture is synthetic. This command needs no network, broker account, Codex session or API key:
 
 ```bash
 python3 -m india analyze DEMO.NS \
   --csv tests/fixtures/india/synthetic.csv \
   --as-of 2026-10-19T09:35:00+05:30 \
-  --tick 0.05 \
-  --capital 100000 \
-  --risk 500
+  --tick 0.05 --capital 100000 --risk 500
 ```
 
-Expected report values:
+Expected numerical report:
 
-| Field | Result |
+| Field | Value |
 | --- | --- |
 | Status | `PAPER_SETUP` |
-| Entry | ₹102.30 |
-| Stop | ₹99.70 |
-| Target | ₹107.50 |
+| Entry / stop / target | ₹102.30 / ₹99.70 / ₹107.50 |
 | Quantity | 178 shares |
 | Estimated loss at stop, including costs | ₹499.83 |
 | Estimated net reward at target | ₹886.98 |
-| Net reward/risk | About 1.77:1 |
+| Net reward/risk | Approximately 1.77 |
 | Execution enabled | `false` |
 
-`DEMO.NS` is synthetic test data, not a listed stock or a real price feed. RSI14 is unavailable at this replay time because too few candles have completed.
+These are fixture results, not live prices or a forecast. RSI14 is unavailable at this cutoff because warmup is insufficient. A numerical `PAPER_SETUP` is separate from full-team clearance: the fictional issuer has no financial filings and this short fixture lacks scenario history.
 
-## Install the Codex skills
+## 2. Install the Codex skills
 
 ```bash
 python3 install_codex.py --dry-run
 python3 install_codex.py
 ```
 
-The installer creates links under `~/.agents/skills`, checks all destinations for conflicts before linking, and refuses to overwrite unrelated skills. Re-running it is safe. Keep this checkout at a stable location: the links point to it. Use `--dest PATH` for a custom installation directory.
+The installer links all 12 skills into `~/.agents/skills`, checks for conflicts and refuses to overwrite unrelated installations. Keep the checkout at a stable path. Use `--dest PATH` to select another directory. Restart Codex if newly installed skills do not appear.
 
-In Codex, try:
+Try a standalone skill:
 
-> Use $trader-scanner to analyze DEMO.NS from tests/fixtures/india/synthetic.csv as of 2026-10-19T09:35:00+05:30, with tick size 0.05, capital ₹100,000 and risk ₹500. Explain the paper report.
+> Use $trader-scanner to analyze DEMO.NS from tests/fixtures/india/synthetic.csv as of 2026-10-19T09:35:00+05:30, with tick 0.05, capital ₹100,000 and risk ₹500. Explain the paper report.
 
-Each skill also has a `run.py` entry point. Calling its absolute path works from another working directory; relative CSV/config paths are resolved from that working directory.
+For a full team using your own permitted data:
 
-## Run the independent specialist team
+> Use $trader-team to review the stock in my CSV, with my verified tick size, capital and risk limits. Run independent specialists, record their actual lifecycle events for the dashboard, and explain each decision. Use the cutoff I supply.
 
-After installing the skills, use a Codex host with native subagent delegation:
+Provide the exact symbol, CSV path, timezone-aware cutoff and numerical limits. The coordinator can research original exchange/issuer sources separately, subject to access conditions and publication-time checks.
 
-> Use $trader-team to independently review TCS.NS using the NSE provider, tick size 0.05, capital ₹100,000 and risk ₹500. Run the specialist agents and explain their disagreements and final paper decision.
+### How the team works
 
-Verify the tick before use. The coordinator prepares one immutable snapshot and delegates scanner, news, analyst, entry, exit, timemachine, budget, risk, broker and alerts to **ten distinct native agents**. It preserves the eleventh, US congressional disclosure role as NOT_APPLICABLE. Independent roles can run in parallel; dependent reviews wait for their prerequisites. Available worker slots determine concurrency. A single `$trader-scanner` invocation remains a standalone analysis.
-
-Any specialist BLOCK vetoes the proposal, and risk must PASS. Missing required filings, history or reviews produce an incomplete result; the coordinator does not force approval. News and financial reviewers must read dated exchange/issuer sources published by the cutoff. Official issuer domains require an explicit allowlist. These source checks validate metadata and domains; source content still needs actual agent review.
-
-The CLI prepares and validates evidence; **it does not itself start AI agents**:
-
-```bash
-# Offline preparation only. The fixture is fictional and has insufficient forecast history.
-python3 trader-team/run.py prepare DEMO.NS \
-  --csv tests/fixtures/india/synthetic.csv \
-  --as-of 2026-10-19T09:35:00+05:30 \
-  --tick 0.05 --capital 100000 --risk 500 --team-dir trader/demo-team
-
-# Inspect a specialist's numerical evidence. This is not an agent judgement.
-python3 trader-risk/run.py evaluate --session trader/demo-team
-
-# After Codex has run the actual agents and recorded their reviews:
-python3 trader-team/run.py finalize --session trader/demo-team
+```mermaid
+flowchart LR
+    D[Frozen OHLCV snapshot] --> S[Scanner]
+    D --> N[News]
+    D --> A[Financial analyst]
+    S --> E[Entry]
+    N --> E
+    A --> E
+    E --> X[Exit]
+    X --> T[Time Machine]
+    T --> B[Budget]
+    B --> R[Risk veto]
+    R --> P[Paper broker]
+    P --> L[Alerts review]
+    L --> F[Verified report]
 ```
 
-Use a new directory for every preparation. Without actual agent reviews, finalization stays PENDING_AGENT_REVIEWS. The DEMO fixture cannot produce a cleared full-team ticket: issuer research and 20-session scenario history are unavailable. Online NSE requests are bounded to 28 calendar days and usually also need a longer, separately collected complete CSV history for scenario clearance. Ordinary fixture analysis still produces the numerical PAPER_SETUP shown above. No command places orders, assumes a fill or starts alert monitoring.
+Scanner, news and analyst can work concurrently. Dependent roles wait for prerequisite reviews; concurrency depends on the host's worker slots. Each required role gets a distinct actual native agent identity and writes its own judgement. Numerical evidence is prepared once.
 
-`--portfolio FILE` supplies a dated paper cash/equity/position snapshot; without it the team explicitly assumes an empty paper portfolio funded by `--capital`. `--team-limits FILE` overrides cash buffer, position/order, total open risk, daily loss/count and minimum net reward/risk caps. See [team contracts and examples](docs/TEAM.md) and the [coordinator instructions](trader-team/SKILL.md).
+| Skill | Responsibility |
+| --- | --- |
+| `$trader-team` | Prepare evidence, delegate actual specialists and combine verified reviews |
+| `$trader-scanner` | Data coverage, indicators, tick verification and candidates |
+| `$trader-news` | Dated original announcements and catalysts |
+| `$trader-analyst` | Comparable original financial filings and limitations |
+| `$trader-entry` | Completed-bar signal confirmation and timing |
+| `$trader-exit` | Proposed stop, target and reward/risk |
+| `$trader-timemachine` | Historical next-bar replay and scenario limitations |
+| `$trader-budget` | Cash, costs, position sizing and supplied exposure |
+| `$trader-risk` | Independent veto and numerical risk checks |
+| `$trader-broker` | Paper-ticket review; no execution transport |
+| `$trader-alerts` | Order-bound alert definitions; no implicit monitoring |
+| `$trader-pelosi` | Compatibility boundary: US congressional disclosures are NOT_APPLICABLE |
 
-Native delegation must be exposed by the Codex host; otherwise the skill reports MULTI_AGENT_UNAVAILABLE. Optional named agent profiles are in `codex-agents/`; generic native agents can also load each specialist's instructions. More agents use additional Codex capacity. Python uses no AI API and needs no OpenAI API key.
+Any independent `BLOCK` vetoes the proposal. Risk must `PASS`; all required reviews must be valid and available for a cleared paper ticket. Missing research is not treated as clearance. Native identities are recorded provenance, not cryptographic attestation.
 
-See the [official Codex skill documentation](https://learn.chatgpt.com/docs/build-skills) for skill discovery and installation details.
+If the host cannot delegate native agents, the skill reports `MULTI_AGENT_UNAVAILABLE`. CLI subprocesses and numerical artifacts do not count as independent AI agents. The CLI does not call an OpenAI API; Codex access and model usage have separate costs and limits. Optional named profiles in `codex-agents/` are not installed automatically.
 
-## Analyze market data for free
+See [team contracts and upstream parity](docs/TEAM.md) and the [coordinator workflow](trader-team/references/workflow.md).
 
-Yahoo is selected automatically:
-
-```bash
-# Current intraday analysis
-python3 -m india analyze RELIANCE.NS --tick 0.05 --capital 100000 --risk 500
-
-# Completed daily historical bars
-python3 -m india history RELIANCE.NS --tick 0.05
-
-# Replay the available intraday history
-python3 -m india backtest RELIANCE.NS --tick 0.05 --capital 100000 --risk 500
-```
-
-**The tick sizes above are examples.** Supply the instrument's verified tick size for the relevant trading date. The application does not infer tick sizes from the latest price.
-
-Use `.NS` for NSE symbols, such as `RELIANCE.NS`, and `.BO` for BSE symbols/codes, such as `500325.BO`. Provider coverage can differ.
-
-Yahoo requests the latest available session of five-minute candles (`range=1d`) or one month of daily candles. It uses `query2` and `query1` hosts with bounded retries. If a response contains an internal gap, it tries the alternate host for an intact response. The two hosts are not independent data sources. Missing candles are never invented or forward-filled.
-
-If a candle is absent inside the 09:15-15:15 strategy window, analysis returns a partial paper report with `status: BLOCKED_INCOMPLETE_DATA` and `plan: null`. `data_quality.missing_bars` identifies the missing slots. Indicators use only uninterrupted candles from the session open up to the first gap; `indicators_as_of` shows their cutoff. `last_bar` identifies the newest received strategy candle and may be later than the indicator cutoff. Partially populated candles still fail validation with the timestamp and missing fields. A successful command means the report was produced; it does not mean a trade is eligible.
-
-After market hours the report shows `market_open: false`; old candles are marked stale. To explicitly replay today's data before a later gap, use a matching timestamp, for example:
+## 3. Open the React dashboard
 
 ```bash
-python3 -m india analyze TCS.NS --tick 0.05 --capital 100000 --risk 500 \
-  --as-of 2026-10-23T10:00:00+05:30
+npm ci --prefix dashboard
+npm run build --prefix dashboard
+python3 -m dashboard
 ```
 
-This is historical replay, not a live quote. The date must fall within the provider's available session. Backtests continue to reject internal gaps rather than produce results across missing bars.
+Open **http://127.0.0.1:8765**. Keep it open while running `$trader-team` in Codex. A fresh clone starts with an empty workspace; private local trading reports are not distributed.
 
-`--as-of` enables historical replay and filters available candles. It cannot retrieve arbitrary older Yahoo history. NSE supports a bounded date request, subject to website retention; CSV and Upstox are other options.
+- **Sleeping:** queued or dispatched, without a confirmed running event.
+- **Working:** the coordinator recorded an actual running event.
+- **Holding a report:** a validated independent review was saved, including `BLOCK` or `UNAVAILABLE` outcomes.
+- **Attention:** a failed task or invalid review.
 
-### Direct NSE website data: no account or token
+Click a desk to open its report, numerical evidence, original sources and raw JSON. The interface supports mobile layouts and reduced motion. Session files refresh every two seconds. Lifecycle states are recorded events, not heartbeats or hidden reasoning streams.
 
-```bash
-python3 -m india analyze TCS.NS --provider nse --tick 0.05 --capital 100000 --risk 500
-python3 -m india history TCS.NS --provider nse --tick 0.05 --days 28
-python3 -m india backtest TCS.NS --provider nse --tick 0.05 --capital 100000 --risk 500
+“New review” creates a request to copy into Codex. The browser does not start agents, submit orders or send notifications. The server binds to loopback and has no built-in authentication; it is intended for local use, not public internet exposure.
 
-# Explicit historical replay, verified against actual NSE data on this date.
-python3 -m india analyze TCS.NS --provider nse --tick 0.05 \
-  --as-of 2026-10-23T10:30:00+05:30
-```
+See [dashboard setup and development](dashboard/README.md).
 
-The adapter reads the JSON endpoints behind [NSE Technical Charting](https://charting.nseindia.com/). It resolves the exact NSE equity symbol and token, requests five-minute or daily bars, and converts the website's IST wall-clock timestamps to timezone-aware candle opening times. No third-party packages are required. Symbol lookups are cached within the provider instance. Transient HTTP/network failures retry once; access denials stop immediately. No proxy rotation, CAPTCHA bypass, paid feed, or silent provider switching is used.
+## Use your own market data
 
-Use `.NS` symbols; this adapter does not support `.BO` securities. `--days` selects 1-28 calendar days, default 7. Requested dates remain subject to the website's available history. Missing, invalid and duplicate candles are checked. Indicator warmup depends on the requested lookback.
+Use `.NS` for NSE and `.BO` for BSE provider symbols. Tick size is an explicit INR input: verify its current instrument/date applicability. It is not inferred from price or automatically certified by the CLI.
 
-Website OHLCV values are preserved as published. Opening-candle auction treatment, volume and OHLC aggregation can differ from Yahoo; do not mix snapshots or assume matching indicator values across providers. VWAP is an approximation using candle typical prices and reported bar volumes, rather than a reconstruction from every exchange trade. Website access, schemas, retention and freshness are not guaranteed; this is not an exchange subscription feed.
-
-Actual online checks on 23 October 2026 returned complete 72-bar strategy sessions for TCS and RELIANCE. TCS replay at 10:30 returned 15 completed current-session bars, and its seven-calendar-day paper backtest completed. These checks establish observed access, not continuous availability or profitability.
-
-## Data providers
-
-| Provider | Selection | Access | Notes |
-| --- | --- | --- | --- |
-| Yahoo | Default, or `--provider yahoo` | No account or API key | Unofficial public feed; may lag or fail |
-| NSE website | `--provider nse` | No account or API key | Direct public charts; `.NS` equities, 5m/1d, website availability limits |
-| CSV | `--csv PATH` | Offline, no credentials | User-supplied OHLCV; overrides online provider selection |
-| Upstox V3 | `--provider upstox` | Account and local token | Documented broker-data endpoints |
-
-The program never silently switches between providers. If the selected source fails validation, it reports the problem.
-
-### CSV format
-
-Required columns:
+### CSV
 
 ```csv
 symbol,interval,time,open,high,low,close,volume
 DEMO.NS,5m,2026-10-19T09:15:00+05:30,99.9,100.2,99.7,100,1000
 ```
 
-The example row is synthetic. Use `5m` for analysis/backtesting and `1d` for daily history. Timestamps represent **bar opening times** and must include a timezone. Rows must match the requested symbol and interval, be chronological and unique, and contain valid OHLCV values.
+The row above is synthetic. Real inputs must be chronological, unique and complete, with valid OHLCV. Timestamps represent candle **opening times** and require a timezone. Use `5m` for intraday workflows and `1d` for daily history. Supply data you are permitted to process.
 
-Only completed candles enter intraday analysis. Stale data cannot generate a fresh paper setup. A replay timestamp is explicitly labeled in the report.
+### Provider adapters
 
-### Optional Upstox setup
+| Provider | Selection | Access and limitations |
+| --- | --- | --- |
+| CSV | `--csv FILE` | Offline, user-supplied data; overrides provider selection |
+| Yahoo | `--provider yahoo` (CLI default) | Unofficial public interface; delays, gaps, access failures and provider terms apply |
+| NSE charting website | `--provider nse` | Experimental website adapter, `.NS` only; permission and terms must be reviewed before use |
+| Upstox V3 | `--provider upstox` | Account, local token and appropriate API/data permissions required |
 
-Upstox documents a free, read-only Analytics Token with one-year validity and no static-IP requirement for market-data calls. An Upstox account is required. Generate the token through the Analytics tab in Developer Apps and set `UPSTOX_ANALYTICS_TOKEN` in your local environment or secret manager. Never commit tokens or paste them into chat.
+NSE and Upstox requests support `--days 1` through `--days 28`, default 7. Yahoo requests a short intraday window. Twenty-eight calendar days generally do not provide 20 complete **prior trading sessions**, so full scenario review may require longer, consistently sourced CSV history. No automatic historical accumulation is implemented.
 
-The adapter prefers `UPSTOX_ANALYTICS_TOKEN`; `UPSTOX_ACCESS_TOKEN` remains supported. Generating another analytics token revokes the previous one. Check the [official Analytics Token documentation](https://upstox.com/developer/api-documentation/announcements/analytics-token/) for current access conditions.
+The NSE adapter's technical availability does not establish authorization to scrape or use website data for simulations. [NSE terms](https://www.nseindia.com/static/nse-terms-of-use) expressly restrict automated collection and virtual-trading/simulation reuse. Use an authorized data source for your intended purpose. See [third-party notices](NOTICE.md).
+
+For an online provider you are authorized to use, set a verified tick explicitly rather than copying a stock-specific value from an example:
 
 ```bash
-# Requires a token already configured in the local environment.
-python3 -m india analyze RELIANCE.NS --provider upstox --tick 0.05
-python3 -m india history RELIANCE.NS --provider upstox --tick 0.05 --days 28
-python3 -m india backtest RELIANCE.NS --provider upstox --tick 0.05 --days 14
+# Replace both variables with the exact instrument and verified tick.
+python3 -m india analyze "$SYMBOL" --provider upstox \
+  --tick "$VERIFIED_TICK" --capital 100000 --risk 500
 ```
 
-`--days` applies to NSE and Upstox: 1-28 calendar days, default 7. The Upstox adapter combines historical and current-day endpoints when appropriate, resolves equities through the instrument master, and retries transient failures at most three times. Authentication failures do not retry.
+Upstox reads `UPSTOX_ANALYTICS_TOKEN`, then `UPSTOX_ACCESS_TOKEN`, from the environment. Configure credentials privately; do not put them in commands, chat, reports or version control. Access conditions and token validity are determined by [Upstox](https://upstox.com/developer/api-documentation/).
 
-To reuse a downloaded master, supply `--instruments /path/to/NSE.json.gz`. JSON and compressed JSON are supported; keep the file current. Tick size remains an explicit INR input.
+Provider failures stay explicit. Missing candles are not fabricated or forward-filled. `--fallback-provider` is opt-in and selects whole snapshots; the adapters do not merge data from different providers. No lifetime-free or real-time service availability is promised.
 
-Provider references: [historical candles](https://upstox.com/developer/api-documentation/v3/get-historical-candle-data/), [intraday candles](https://upstox.com/developer/api-documentation/v3/get-intra-day-candle-data/), [instrument master](https://upstox.com/developer/api-documentation/instruments/).
+## Analysis rules and result states
 
-Upstox has mocked-response test coverage; account-specific connectivity requires validation with your credentials.
+The current strategy is the first completed five-minute close above the 09:15–09:30 opening range. The stop uses its low; the default target is 2R, configurable with `--rr`. The strategy is long-only, cash-funded and uses whole shares.
 
-## Available skills
+All equities use a conservative **09:15–15:15 IST strategy window**. This excludes closing-auction data and also omits later continuous trading for securities without an auction. The broader calendar session is distinct from strategy eligibility. VWAP is approximated from candle typical prices and volumes; EMA uses first-close seeding; RSI14 needs warmup.
 
-| Skill | Purpose |
+Sizing includes estimated brokerage, exchange charges, STT, stamp duty, SEBI charges, GST and slippage. Rates in `india/market.py` are assumptions; use `--cost-config FILE` for verified overrides. A provider selection does not select a broker's fee schedule. Stops and modeled costs do not guarantee realized maximum losses.
+
+| Result | Meaning |
 | --- | --- |
-| `$trader-scanner` | Analyze supplied symbols for rule-based setups and indicators |
-| `$trader-entry` | Explain a completed-bar breakout trigger |
-| `$trader-exit` | Explain tick-rounded stop and target levels |
-| `$trader-budget` | Size a cash-funded position within the cost-inclusive risk budget |
-| `$trader-risk` | Review freshness, setup eligibility, costs, and risk results |
-| `$trader-timemachine` | Replay historical intraday setups |
-| `$trader-broker` | Display paper plans; execution is unavailable |
-| `$trader-alerts` | Run a single setup check; repeated monitoring needs an external scheduler |
-| `$trader-news` | Read and cite exchange or issuer announcements |
-| `$trader-analyst` | Review original Indian company financial reports |
-| `$trader-pelosi` | Explain that US congressional disclosures are outside this workflow |
+| `PAPER_SETUP` | Standalone numerical setup; not full-team clearance |
+| `NO_SETUP` | No currently eligible rule-based setup |
+| `BLOCKED_INCOMPLETE_DATA` | Required strategy candles are absent |
+| `PENDING_AGENT_REVIEWS` | Required independent reviews are absent or invalid |
+| `REVIEW_INCOMPLETE` | Required evidence is unavailable or risk has not passed |
+| `BLOCKED` | A numerical check or independent specialist veto blocks the team proposal |
+| `READY_PAPER_TICKET` | Required reviews and numerical gates permit a paper ticket; execution stays disabled |
 
-News and financial-report skills guide source reading; automated Indian filings adapters are not included. Numerical skills share the same deterministic analysis engine. Watchlist scanning runs analysis per supplied symbol; automatic discovery of all Indian stocks is not implemented.
+A successful CLI exit means a report was produced. Inspect its status. `doctor` additionally returns a nonzero exit for failed health checks. After-hours stale data, missing warmup, flat candles and unavailable sources must not be converted into forced trades.
 
-## Analysis and risk rules
+## Replay, research and operations
 
-The intraday setup is the first completed five-minute close above the 09:15-09:30 opening range. The stop uses the opening-range low. The default target is 2R, configurable with `--rr`.
-
-Analysis and backtesting use a conservative **09:15-15:15 IST strategy window for all equities**, including stocks that can trade continuously later. From August 2026, eligible NSE stocks enter the [Closing Auction Session](https://www.nseindia.com/static/products-services/closing-auction-session) at 15:15. Auction rows are excluded rather than interpreted as ordinary five-minute candles. A missing 15:20 row therefore does not invalidate this strategy's data. Reports expose `analysis_window` and `strategy_open`; `market_open` is the broad cash-market calendar check, not proof that a particular stock is in continuous trading.
-
-Position sizing uses whole shares, available capital, and the specified risk budget including estimated stop-exit costs. A proposed trade must also meet a net reward/risk floor of 1. Default capital is ₹100,000 and default risk is ₹500; pass your own values explicitly.
-
-Reports include source, timestamps, stale status, indicators, proposed levels, estimated costs, quantity, and paper status. RSI requires warmup; EMA uses first-close seeding. A signal timestamp denotes the bar opening time; confirmation occurs at its close.
-
-Costs model a resident retail intraday equity schedule, including brokerage, exchange charges, STT, stamp duty, SEBI charges, GST, and default slippage of 5 basis points per side. The schedule in [india/market.py](india/market.py) is an estimate, not a broker contract note. Override its rate keys using `--cost-config FILE`.
-
-Unknown cost keys and invalid prices/quantities fail validation. This prevents an override typo from silently retaining an unintended rate.
-
-A data provider choice does not change the brokerage cost profile. Verify your own broker's charges separately. Reference schedule: [Zerodha charges](https://zerodha.com/charges), checked during development on 23 October 2026.
-
-## Backtesting
+Offline historical replay:
 
 ```bash
 python3 -m india backtest DEMO.NS \
@@ -251,75 +213,77 @@ python3 -m india backtest DEMO.NS \
   --tick 0.05 --capital 100000 --risk 500
 ```
 
-Signals use only preceding and current completed bars. Entries fill at the next bar's open. When a candle touches both stop and target, the stop is evaluated first. Gap-through-stop exits and estimated trading costs are included. Remaining paper positions exit at the 15:10 candle's close (15:15), before the closing auction. Unresolved trades are omitted when sufficient exit data is unavailable.
+Entries use the next candle's open. Stop-first precedence handles same-bar ambiguity; gaps and estimated costs are included. Remaining trades close at the 15:10 candle's close (15:15); unresolved trades are omitted. Basic `backtest` uses a fixed budget per trade. The separate `research` command evaluates fixed rules on chronological complete-session splits with compounded realized equity and slippage stress.
 
-This is fixed-budget, per-trade replay. It does not simulate portfolio equity, simultaneous exposure, daily-loss enforcement, or compounding. A short backtest does not establish profitability.
-
-## Research and scheduled paper operation
+To archive and replay a numerical run:
 
 ```bash
-# Feed health, paper analysis and an auditable snapshot. No orders.
-python3 -m india doctor TCS.NS --provider nse --fallback-provider yahoo \
+python3 -m india analyze DEMO.NS \
+  --csv tests/fixtures/india/synthetic.csv \
+  --as-of 2026-10-19T09:35:00+05:30 \
   --tick 0.05 --record-db var/runs.sqlite
 
-# Fixed-rule chronological holdout with compounded equity and cost stress.
-python3 -m india research TCS.NS --provider nse --days 7 \
-  --tick 0.05 --capital 100000 --risk 500 --record-db var/research.sqlite
-
-# Substitute the run_id printed by a recorded command. Works offline.
-python3 -m india replay RUN_ID_FROM_REPORT --db var/runs.sqlite
-
-# One bounded check, suitable for an external five-minute scheduler.
-python3 -m india.job --config config/paper.example.json
+# Use the run_id returned by the previous command.
+python3 -m india replay RUN_ID --db var/runs.sqlite
 ```
 
-`doctor` exits 0 for healthy data and 1 for failures. After-hours staleness is expected when the latest session is complete; health PASS does not mean a trade is eligible. `--fallback-provider` is opt-in and keeps whole snapshots separate. `--record-db` preserves exact data, settings, calendar and code fingerprint; replay reports mismatches instead of silently using revised provider data. No credentials are archived.
+Team preparation, evaluation and finalization helpers are documented in [the team workflow](trader-team/references/workflow.md). They do not start model agents themselves.
 
-The scheduled job checks IST and holidays itself, skips outside 09:35-15:15, prevents overlapping runs with an OS lock, enforces a child timeout, and rotates local JSON logs. It does not install a scheduler or send messages. Review the example's tick size and INR limits before use.
+Further documentation:
 
-The new `research` command is separate from the original fixed-budget `backtest`. It sizes each trade from realized equity and evaluates fixed rules on chronological training/holdout partitions under higher slippage assumptions. It rejects partial/missing sessions and remains single-symbol research. A five-session online check is not statistical evidence of profitability.
+- [Research methodology](docs/RESEARCH.md): causal fills, holdout splits, cost stress and statistical limits.
+- [Operating guide](docs/OPERATIONS.md): health checks, calendar overrides, backups, bounded jobs and Docker.
+- [Team portfolio inputs](docs/TEAM.md): paper cash/exposure, daily limits and exact-order review binding.
 
-See [research methodology](docs/RESEARCH.md) and [local/container operations](docs/OPERATIONS.md) for full commands, calendar overrides, backups, CI, Docker and remaining acceptance work. These additions improve operational tooling; they do not establish 10/10 readiness without sustained market-hours observations.
+The scheduled checker uses an OS lock and targets macOS/Linux. Scheduling it does not launch the native specialist team. The Docker image packages the Python CLI; it does not include the React dashboard or a Codex runtime.
 
-## Limitations
-
-- The strategy uses IST 09:15-15:15. It excludes closing auctions and the final 15 minutes of non-auction stocks; it does not infer security-specific auction eligibility.
-- Bundled holiday coverage is 2026. `--calendar PATH` accepts sourced NSE/BSE year records; uncovered years fail closed. Special/Muhurat sessions remain excluded.
-- BSE uses the common cash-equity calendar here; verify exchange-specific exceptional closures. Calendar reference: [NSE holidays](https://www.nseindia.com/resources/exchange-communication-holidays).
-- Free public data is not a guaranteed real-time feed. If both Yahoo hosts fail, retry later or provide complete CSV data.
-- No live orders, derivatives, short selling, leverage, delivery-cost accounting, automatic broker reconciliation or multi-asset backtest simulation. Team risk checks use supplied paper portfolio exposure.
-- Stops and modeled costs cannot guarantee actual execution prices or maximum losses.
-
-This project is research and paper-trading software, not financial advice or an unattended trading system.
-
-## Tests
+## Tests and development
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests
+python3 -m unittest discover -s tests
+npm ci --prefix dashboard
+npm run build --prefix dashboard
 ```
 
-Coverage includes indicators, historical replay, stale/missing data, market hours, costs, look-ahead prevention, NSE wall-clock conversion, exact symbol matching, auction exclusion, provider errors/retries, installed Codex runners, scenario simulation and team handoff integrity/vetoes. Tests run offline using fixtures and mocks, including captured NSE and Yahoo responses. Mock agent IDs in unit tests are explicitly labelled; passing tests does not establish online feed availability or real agent independence.
+Python tests use fixtures and mocks, without live provider requests. They cover indicators, costs, timezones, market hours, stale/missing data, look-ahead prevention, provider parsing, snapshot integrity, risk vetoes and dashboard observability. Dashboard HTTP tests bind an ephemeral loopback port and may be skipped by restrictive sandboxes. Mock agent identities are explicitly test fixtures, not native runtime claims.
 
-## Repository layout
+For React development, run `python3 -m dashboard` and, in another terminal, `npm run dev --prefix dashboard`; Vite proxies `/api` to the local Python server. Current CI tests the Python suite on Linux/macOS and a CLI container smoke check. Dashboard build and browser verification are local checks, not yet CI coverage.
+
+## Known limits
+
+- Experimental software with no sustained production validation or demonstrated profitable strategy.
+- Public/provider data can be stale, revised, flat, incomplete or unavailable; access and usage rights are separate from technical connectivity.
+- Automatic tick verification and normalization are not implemented. An unresolved tick blocks independent clearance.
+- Built-in holiday coverage is 2026; uncovered years fail closed. BSE currently shares the bundled calendar and needs exchange-specific verification. Special sessions are unsupported.
+- No multi-asset backtest, short selling, derivatives, leverage, delivery-cost model or automatic broker reconciliation.
+- No persistent fills/portfolio ledger, notification delivery or built-in background alert monitor.
+- No automated filings adapter or exchange-wide stock discovery. News/analyst review requires accessible, dated original sources.
+- Small samples, corporate actions, liquidity, market impact, selection bias and regime changes limit historical conclusions.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for focused changes and validation. Report security issues using the guidance in [SECURITY.md](SECURITY.md); do not publish credentials or private trading data in an issue.
+
+`trader/`, `var/`, credential files, dependencies and generated dashboard builds are local artifacts excluded from Git. Ignore rules do not remove files already committed or clean history. Review staged content and any reachable history before a public push. [Release readiness](docs/RELEASE.md) records the current audit scope and remaining data-rights work.
+
+## Project layout
 
 ```text
-india/                  Shared Indian-market CLI, providers, analysis, and costs
-config/                 Example job and sourced 2026 calendar documents
-docs/                   Research methodology and operating instructions
-Dockerfile              Non-root, standard-library-only runtime image
-.github/workflows/      Offline tests and container smoke CI
-trader-*/SKILL.md        Modular Codex instructions
-trader-*/run.py          Portable runners for the shared CLI
-trader-team/             Native Codex delegation instructions and evidence helper
-codex-agents/            Optional named specialist agent profiles
-install_codex.py         Codex skill-link installer
-legacy/                 Original US utilities and regression inputs
-tests/                 Offline tests and fixtures
-LICENSE                 Original MIT license
+india/             Providers, numerical analysis, risk, research and run archives
+dashboard/         React UI, animated agent desks and read-only local HTTP server
+trader-*/          Modular skills, portable runners and coordinator instructions
+codex-agents/      Optional named Codex specialist profiles
+config/            Example paper job and sourced calendar configuration
+docs/              Team contracts, research, operations and release notes
+legacy/            Archived upstream US utilities, including reused Wilder RSI
+tests/             Offline regression tests and synthetic/captured fixtures
+install_codex.py   Conflict-checking skill-link installer
 ```
-
-The original US utilities remain under `legacy/` for regression coverage and reusable calculations, including Wilder RSI. They are excluded from the active Indian skill workflow. Claude plugin manifests and broker connector configuration have been removed.
 
 ## License and attribution
 
-MIT licensed. Adapted from [Jake Schincariol's day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill). The original copyright and license are preserved in [LICENSE](LICENSE).
+Software is [MIT licensed](LICENSE), adapted from [Jake Schincariol's day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill). The original copyright and license are retained. The archived US utilities support regression coverage; this is not full US integration parity or an official OpenAI, NSE, BSE, Yahoo or Upstox product.
+
+Third-party market data, news, filings, trademarks and dependencies retain their respective rights. See [NOTICE.md](NOTICE.md). The MIT license is not a grant of data-provider permissions.
+
+Research and paper-trading use only. Reports are not investment advice, an execution service or evidence of future returns.
