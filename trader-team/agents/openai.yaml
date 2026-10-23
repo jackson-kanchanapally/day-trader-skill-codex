@@ -1,0 +1,4 @@
+interface:
+  display_name: "Indian Trading Team"
+  short_description: "Independent NSE/BSE paper trading agent reviews"
+  default_prompt: "Use $trader-team to coordinate independent specialist reviews of an NSE paper setup using my verified tick size, capital and risk."

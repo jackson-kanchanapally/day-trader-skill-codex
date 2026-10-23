@@ -1,0 +1,12 @@
+{
+  "symbol": "TCS.NS",
+  "provider": "nse",
+  "fallback_providers": ["yahoo"],
+  "tick": 0.05,
+  "capital": 100000,
+  "risk": 500,
+  "days": 7,
+  "record_db": "var/runs.sqlite",
+  "state_dir": "var/state",
+  "timeout_seconds": 120
+}

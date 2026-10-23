@@ -1,0 +1,15 @@
+.git
+.agents
+.codex
+.aws
+.aws
+.env
+.env.*
+var
+**/__pycache__
+**/*.pyc
+**/*.sqlite*
+**/*.pem
+**/*.key
+.venv
+venv

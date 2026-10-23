@@ -1,6 +1,6 @@
 # Indian Day Trader Skills for Codex
 
-Modular OpenAI Codex skills for **NSE/BSE stock analysis, historical replay, and paper-trading reports**. Python performs the calculations; Codex runs the tools and explains the results.
+Modular OpenAI Codex skills for **NSE/BSE stock analysis, historical replay, and paper-trading reports**. Python performs the calculations; Codex can coordinate independent specialist agents to review the same frozen evidence and explain their decisions.
 
 **Free public Yahoo data is the default; direct NSE website data is available with `--provider nse`. Neither requires a broker account, market-data subscription, or API key. Live order execution is disabled.**
 
@@ -15,7 +15,13 @@ The Python CLI runs independently of Codex and makes no AI API calls. Codex acce
 - Whole-share position sizing in INR with estimated costs and slippage.
 - Historical replay with next-bar entry and conservative exit handling.
 - Yahoo, direct NSE charts, offline CSV, and optional Upstox V3 data providers.
-- Eleven modular Codex skills with portable command-line runners.
+- Eleven modular specialist skills plus a Codex team coordinator with ten distinct reviewers and a risk veto.
+- Shared, checksummed handoff files; portfolio cash/exposure/daily limits; paper ticket and alert definitions.
+- Seeded 10,000-path scenario analysis when at least 20 complete prior sessions are available.
+- SQLite snapshot archives and deterministic offline numerical replay.
+- Health checks, explicit provider fallback, bounded scheduled jobs and rotated JSON logs.
+- Chronological holdout research with compounded equity, drawdown and slippage stress tests.
+- Configurable sourced holiday calendars, Linux/macOS CI and a non-root Docker image definition.
 
 ## Requirements
 
@@ -68,6 +74,38 @@ In Codex, try:
 > Use $trader-scanner to analyze DEMO.NS from tests/fixtures/india/synthetic.csv as of 2026-10-19T09:35:00+05:30, with tick size 0.05, capital ₹100,000 and risk ₹500. Explain the paper report.
 
 Each skill also has a `run.py` entry point. Calling its absolute path works from another working directory; relative CSV/config paths are resolved from that working directory.
+
+## Run the independent specialist team
+
+After installing the skills, use a Codex host with native subagent delegation:
+
+> Use $trader-team to independently review TCS.NS using the NSE provider, tick size 0.05, capital ₹100,000 and risk ₹500. Run the specialist agents and explain their disagreements and final paper decision.
+
+Verify the tick before use. The coordinator prepares one immutable snapshot and delegates scanner, news, analyst, entry, exit, timemachine, budget, risk, broker and alerts to **ten distinct native agents**. It preserves the eleventh, US congressional disclosure role as NOT_APPLICABLE. Independent roles can run in parallel; dependent reviews wait for their prerequisites. Available worker slots determine concurrency. A single `$trader-scanner` invocation remains a standalone analysis.
+
+Any specialist BLOCK vetoes the proposal, and risk must PASS. Missing required filings, history or reviews produce an incomplete result; the coordinator does not force approval. News and financial reviewers must read dated exchange/issuer sources published by the cutoff. Official issuer domains require an explicit allowlist. These source checks validate metadata and domains; source content still needs actual agent review.
+
+The CLI prepares and validates evidence; **it does not itself start AI agents**:
+
+```bash
+# Offline preparation only. The fixture is fictional and has insufficient forecast history.
+python3 trader-team/run.py prepare DEMO.NS \
+  --csv tests/fixtures/india/synthetic.csv \
+  --as-of 2026-10-19T09:35:00+05:30 \
+  --tick 0.05 --capital 100000 --risk 500 --team-dir trader/demo-team
+
+# Inspect a specialist's numerical evidence. This is not an agent judgement.
+python3 trader-risk/run.py evaluate --session trader/demo-team
+
+# After Codex has run the actual agents and recorded their reviews:
+python3 trader-team/run.py finalize --session trader/demo-team
+```
+
+Use a new directory for every preparation. Without actual agent reviews, finalization stays PENDING_AGENT_REVIEWS. The DEMO fixture cannot produce a cleared full-team ticket: issuer research and 20-session scenario history are unavailable. Online NSE requests are bounded to 28 calendar days and usually also need a longer, separately collected complete CSV history for scenario clearance. Ordinary fixture analysis still produces the numerical PAPER_SETUP shown above. No command places orders, assumes a fill or starts alert monitoring.
+
+`--portfolio FILE` supplies a dated paper cash/equity/position snapshot; without it the team explicitly assumes an empty paper portfolio funded by `--capital`. `--team-limits FILE` overrides cash buffer, position/order, total open risk, daily loss/count and minimum net reward/risk caps. See [team contracts and examples](docs/TEAM.md) and the [coordinator instructions](trader-team/SKILL.md).
+
+Native delegation must be exposed by the Codex host; otherwise the skill reports MULTI_AGENT_UNAVAILABLE. Optional named agent profiles are in `codex-agents/`; generic native agents can also load each specialist's instructions. More agents use additional Codex capacity. Python uses no AI API and needs no OpenAI API key.
 
 See the [official Codex skill documentation](https://learn.chatgpt.com/docs/build-skills) for skill discovery and installation details.
 
@@ -200,6 +238,8 @@ Reports include source, timestamps, stale status, indicators, proposed levels, e
 
 Costs model a resident retail intraday equity schedule, including brokerage, exchange charges, STT, stamp duty, SEBI charges, GST, and default slippage of 5 basis points per side. The schedule in [india/market.py](india/market.py) is an estimate, not a broker contract note. Override its rate keys using `--cost-config FILE`.
 
+Unknown cost keys and invalid prices/quantities fail validation. This prevents an override typo from silently retaining an unintended rate.
+
 A data provider choice does not change the brokerage cost profile. Verify your own broker's charges separately. Reference schedule: [Zerodha charges](https://zerodha.com/charges), checked during development on 23 October 2026.
 
 ## Backtesting
@@ -215,13 +255,39 @@ Signals use only preceding and current completed bars. Entries fill at the next 
 
 This is fixed-budget, per-trade replay. It does not simulate portfolio equity, simultaneous exposure, daily-loss enforcement, or compounding. A short backtest does not establish profitability.
 
+## Research and scheduled paper operation
+
+```bash
+# Feed health, paper analysis and an auditable snapshot. No orders.
+python3 -m india doctor TCS.NS --provider nse --fallback-provider yahoo \
+  --tick 0.05 --record-db var/runs.sqlite
+
+# Fixed-rule chronological holdout with compounded equity and cost stress.
+python3 -m india research TCS.NS --provider nse --days 7 \
+  --tick 0.05 --capital 100000 --risk 500 --record-db var/research.sqlite
+
+# Substitute the run_id printed by a recorded command. Works offline.
+python3 -m india replay RUN_ID_FROM_REPORT --db var/runs.sqlite
+
+# One bounded check, suitable for an external five-minute scheduler.
+python3 -m india.job --config config/paper.example.json
+```
+
+`doctor` exits 0 for healthy data and 1 for failures. After-hours staleness is expected when the latest session is complete; health PASS does not mean a trade is eligible. `--fallback-provider` is opt-in and keeps whole snapshots separate. `--record-db` preserves exact data, settings, calendar and code fingerprint; replay reports mismatches instead of silently using revised provider data. No credentials are archived.
+
+The scheduled job checks IST and holidays itself, skips outside 09:35-15:15, prevents overlapping runs with an OS lock, enforces a child timeout, and rotates local JSON logs. It does not install a scheduler or send messages. Review the example's tick size and INR limits before use.
+
+The new `research` command is separate from the original fixed-budget `backtest`. It sizes each trade from realized equity and evaluates fixed rules on chronological training/holdout partitions under higher slippage assumptions. It rejects partial/missing sessions and remains single-symbol research. A five-session online check is not statistical evidence of profitability.
+
+See [research methodology](docs/RESEARCH.md) and [local/container operations](docs/OPERATIONS.md) for full commands, calendar overrides, backups, CI, Docker and remaining acceptance work. These additions improve operational tooling; they do not establish 10/10 readiness without sustained market-hours observations.
+
 ## Limitations
 
 - The strategy uses IST 09:15-15:15. It excludes closing auctions and the final 15 minutes of non-auction stocks; it does not infer security-specific auction eligibility.
-- The intraday calendar supports 2026 only; unsupported years fail closed. Special/Muhurat sessions are excluded.
+- Bundled holiday coverage is 2026. `--calendar PATH` accepts sourced NSE/BSE year records; uncovered years fail closed. Special/Muhurat sessions remain excluded.
 - BSE uses the common cash-equity calendar here; verify exchange-specific exceptional closures. Calendar reference: [NSE holidays](https://www.nseindia.com/resources/exchange-communication-holidays).
 - Free public data is not a guaranteed real-time feed. If both Yahoo hosts fail, retry later or provide complete CSV data.
-- No live orders, derivatives, short selling, leverage, delivery-cost accounting, or portfolio-wide risk controls are implemented by the Indian workflow.
+- No live orders, derivatives, short selling, leverage, delivery-cost accounting, automatic broker reconciliation or multi-asset backtest simulation. Team risk checks use supplied paper portfolio exposure.
 - Stops and modeled costs cannot guarantee actual execution prices or maximum losses.
 
 This project is research and paper-trading software, not financial advice or an unattended trading system.
@@ -232,14 +298,20 @@ This project is research and paper-trading software, not financial advice or an 
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests
 ```
 
-Coverage includes indicators, historical replay, stale/missing data, market hours, costs, look-ahead prevention, NSE wall-clock conversion, exact symbol matching, auction exclusion, provider errors/retries, and installed Codex runners. Tests run offline using fixtures and mocks, including captured NSE and Yahoo responses; passing tests does not establish online feed availability.
+Coverage includes indicators, historical replay, stale/missing data, market hours, costs, look-ahead prevention, NSE wall-clock conversion, exact symbol matching, auction exclusion, provider errors/retries, installed Codex runners, scenario simulation and team handoff integrity/vetoes. Tests run offline using fixtures and mocks, including captured NSE and Yahoo responses. Mock agent IDs in unit tests are explicitly labelled; passing tests does not establish online feed availability or real agent independence.
 
 ## Repository layout
 
 ```text
 india/                  Shared Indian-market CLI, providers, analysis, and costs
+config/                 Example job and sourced 2026 calendar documents
+docs/                   Research methodology and operating instructions
+Dockerfile              Non-root, standard-library-only runtime image
+.github/workflows/      Offline tests and container smoke CI
 trader-*/SKILL.md        Modular Codex instructions
 trader-*/run.py          Portable runners for the shared CLI
+trader-team/             Native Codex delegation instructions and evidence helper
+codex-agents/            Optional named specialist agent profiles
 install_codex.py         Codex skill-link installer
 legacy/                 Original US utilities and regression inputs
 tests/                 Offline tests and fixtures

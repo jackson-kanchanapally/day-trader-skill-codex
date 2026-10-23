@@ -23,9 +23,9 @@ def ema(values, period):
         value += 2/(period+1)*(x-value)
     return value
 
-def completed(bars, as_of, minutes):
+def completed(bars, as_of, minutes, calendar=None, exchange='NSE'):
     validate(bars)
-    bars = [b for b in bars if b.time + dt.timedelta(minutes=minutes) <= as_of and session(b.time)]
+    bars = [b for b in bars if b.time + dt.timedelta(minutes=minutes) <= as_of and session(b.time,calendar,exchange)]
     if not bars:
         raise ValueError('No completed regular-session bars as of requested time')
     return bars
@@ -78,10 +78,11 @@ def size(plan, capital, risk, exchange, config):
     return dict(plan, qty=lo, max_loss_estimate=loss, net_reward=reward,
                 net_reward_risk=reward/loss if loss else 0, costs_at_target=costs(e,t,lo,exchange,config))
 
-def report(bars, as_of, symbol, tick, capital, risk, rr=2., config=None):
+def report(bars, as_of, symbol, tick, capital, risk, rr=2., config=None, calendar=None):
     if not all(math.isfinite(x) and x > 0 for x in (tick,capital,risk,rr)):
         raise ValueError('tick, capital, risk and reward/risk must be positive finite numbers')
-    bars = completed([b for b in bars if b.time.astimezone(IST).time() < ANALYSIS_END],as_of,5)
+    exchange = 'NSE' if symbol.endswith('.NS') else 'BSE'
+    bars = completed([b for b in bars if b.time.astimezone(IST).time() < ANALYSIS_END],as_of,5,calendar,exchange)
     today = [b for b in bars if b.time.date() == bars[-1].time.date()]
     if any(b.time.second or b.time.microsecond or b.time.minute % 5 for b in today):
         raise ValueError('Intraday candles must start on the five-minute grid')
@@ -95,7 +96,7 @@ def report(bars, as_of, symbol, tick, capital, risk, rr=2., config=None):
     # the continuous prefix from the session open and show its exact cutoff.
     usable = [b for b in today if b.time < missing[0]] if missing else bars
     stale = not usable or (as_of-usable[-1].time-dt.timedelta(minutes=5)).total_seconds() > 600
-    eligible = not missing and session(as_of) and not stale and as_of.astimezone(IST).time() < dt.time(15,15)
+    eligible = not missing and session(as_of,calendar,exchange) and not stale and as_of.astimezone(IST).time() < ANALYSIS_END
     plan = proposal(bars,tick,rr) if eligible else None
     sized = size(plan,capital,risk,'NSE' if symbol.endswith('.NS') else 'BSE',config) if plan else None
     if missing:
@@ -111,11 +112,11 @@ def report(bars, as_of, symbol, tick, capital, risk, rr=2., config=None):
             'data_quality':{'complete':not missing,'expected_bars':len(expected),
                             'received_bars':len(today),'usable_session_bars':sum(b.time.date()==today[0].time.date() for b in usable),
                             'missing_bars':[t.isoformat() for t in missing]},
-            'market_open':session(as_of),
+            'market_open':session(as_of,calendar,exchange),
             'analysis_window':{'start':'09:15','end':'15:15','timezone':'Asia/Kolkata'},
-            'strategy_open':session(as_of) and as_of.astimezone(IST).time() < ANALYSIS_END}
+            'strategy_open':session(as_of,calendar,exchange) and as_of.astimezone(IST).time() < ANALYSIS_END}
 
-def backtest(bars, symbol, tick, capital, risk, rr=2., config=None):
+def backtest(bars, symbol, tick, capital, risk, rr=2., config=None, calendar=None):
     bars = [b for b in bars if b.time.astimezone(IST).time() < ANALYSIS_END]
     validate(bars)
     if not all(math.isfinite(x) and x > 0 for x in (tick,capital,risk,rr)):
@@ -124,18 +125,21 @@ def backtest(bars, symbol, tick, capital, risk, rr=2., config=None):
         if a.time.date() == b.time.date() and b.time-a.time != dt.timedelta(minutes=5):
             raise ValueError('Missing intraday bars in backtest')
     trades=[]
+    exchange = 'NSE' if symbol.endswith('.NS') else 'BSE'
     for i in range(3,len(bars)-1):
         b,nxt=bars[i],bars[i+1]
-        if not session(b.time) or b.time.time() >= dt.time(15,10): continue
+        if not session(b.time,calendar,exchange) or b.time.time() >= dt.time(15,10): continue
         p=proposal(bars[:i+1],tick,rr)
         if not p or nxt.time-b.time != dt.timedelta(minutes=5): continue
         p['entry']=tick_round(nxt.open,tick,True)  # fill only at next bar open
         if p['entry'] <= p['stop'] or p['entry'] >= p['target']: continue
         p=size(p,capital,risk,'NSE' if symbol.endswith('.NS') else 'BSE',config)
         if not p['qty'] or p['net_reward_risk'] < 1: continue
-        future=[x for x in bars[i+1:] if x.time.date()==b.time.date() and session(x.time)]
+        future=[x for x in bars[i+1:] if x.time.date()==b.time.date() and session(x.time,calendar,exchange)]
         exit_price=None
+        exit_bar=None
         for x in future:
+            exit_bar=x
             if x.low <= p['stop']:
                 exit_price=min(x.open,p['stop']); break
             if x.high >= p['target']:
@@ -144,5 +148,6 @@ def backtest(bars, symbol, tick, capital, risk, rr=2., config=None):
                 exit_price=x.close; break
         if exit_price is None: continue  # incomplete session, never invent a close
         fee=costs(p['entry'],exit_price,p['qty'],'NSE' if symbol.endswith('.NS') else 'BSE',config)['total']
-        trades.append(dict(p,exit=exit_price,net_pnl=(exit_price-p['entry'])*p['qty']-fee))
+        trades.append(dict(p,entry_time=nxt.time.isoformat(),exit_bar=exit_bar.time.isoformat(),
+                           exit=exit_price,net_pnl=(exit_price-p['entry'])*p['qty']-fee))
     return {'mode':'paper','trades':trades,'net_pnl':sum(t['net_pnl'] for t in trades)}

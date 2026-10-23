@@ -2,3 +2,7 @@ __pycache__/
 *.py[cod]
 trader/
 .env
+var/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

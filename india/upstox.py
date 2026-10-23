@@ -21,10 +21,12 @@ def get_json(url, token=None, compressed=False):
                 data = response.read()
             return json.loads(gzip.decompress(data) if compressed else data)
         except urllib.error.HTTPError as exc:
-            if exc.code in (401, 403):
+            code=exc.code
+            exc.close()
+            if code in (401, 403):
                 raise ValueError('Upstox authentication/access denied; renew your Upstox token and check API access') from None
-            if exc.code not in (429, 500, 502, 503, 504) or attempt == 2:
-                raise ValueError('Upstox request failed (HTTP %d); no fallback data used' % exc.code) from None
+            if code not in (429, 500, 502, 503, 504) or attempt == 2:
+                raise ValueError('Upstox request failed (HTTP %d); no fallback data used' % code) from None
         except (urllib.error.URLError, TimeoutError, OSError):
             if attempt == 2:
                 raise ValueError('Upstox network unavailable after 3 attempts') from None

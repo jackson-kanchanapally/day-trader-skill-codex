@@ -15,23 +15,23 @@ spec.loader.exec_module(installer)
 class Codex(unittest.TestCase):
     def test_modular_skills(self):
         skills=list(ROOT.glob('trader-*/SKILL.md'))
-        self.assertEqual(len(skills),11)
+        self.assertEqual(len(skills),12)
         for p in skills:
             text=p.read_text()
             self.assertTrue(text.startswith('---\nname: '+p.parent.name+'\n'))
-            self.assertIn('paper',text)
+            self.assertIn('paper',text.lower())
             self.assertNotIn('CLAUDE_SKILL_DIR',text)
             self.assertTrue((p.parent/'run.py').is_file())
     def test_install_idempotent_and_conflict_preflight(self):
         with tempfile.TemporaryDirectory() as d:
             target=Path(d)/'skills'
-            self.assertEqual(len(installer.install(target,True)),11)
+            self.assertEqual(len(installer.install(target,True)),12)
             self.assertFalse(target.exists())
             target.mkdir(); (target/'trader-risk').mkdir()
             with self.assertRaises(ValueError):installer.install(target)
             self.assertEqual(len(list(target.iterdir())),1)
             (target/'trader-risk').rmdir()
-            self.assertEqual(len(installer.install(target)),11)
+            self.assertEqual(len(installer.install(target)),12)
             self.assertEqual(installer.install(target),[])
     def test_installed_runner_from_unrelated_directory(self):
         with tempfile.TemporaryDirectory() as d:
