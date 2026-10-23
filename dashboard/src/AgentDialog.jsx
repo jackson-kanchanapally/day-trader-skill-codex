@@ -18,7 +18,7 @@ export default function AgentDialog({ dialog, agent, name, index, asOf }) {
           {agent.errors?.map(error=><p className="notice error" key={error}>{error}</p>)}
           <p className="review-summary">{typeof review?.summary==='string'?review.summary:'No independent report has been saved yet. You can leave this workspace open; it will update when the agent saves its review.'}</p>
           {Array.isArray(review?.evidence)&&<><h3>What this agent found</h3><ul className="evidence-list">{review.evidence.map((item,i)=><li key={i}>{typeof item==='string'?item:JSON.stringify(item)}</li>)}</ul></>}
-          {!!sources.length&&<><h3>Original sources</h3><div className="source-list">{sources.map((source,i)=><a key={i} href={source.url} target="_blank" rel="noreferrer">{new URL(source.url).hostname} ↗<small>Published: {source.published_at || 'Unverified'}</small></a>)}</div></>}
+          {!!sources.length&&<><h3>Original sources</h3><div className="source-list">{sources.map((source,i)=><a key={i} href={source.url} target="_blank" rel="noreferrer">{new URL(source.url).hostname} ↗<small>Published: {source.published_at || (source.published_date ? `${source.published_date} (${source.publication_timezone}, date only)` : 'Unverified')}</small></a>)}</div></>}
         </>}
       </div>
     </div>}

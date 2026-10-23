@@ -16,7 +16,8 @@ from india.analysis import report
 from india.data import Bar, CSVProvider, timestamp, IST
 from india.market import DEFAULT_CALENDAR, session
 from india.team import (prepare, evaluate, finalize, read_json, write_json,
-                        load_session, REQUIRED, ARTIFACTS, budget_plan, portfolio_input, limit_input)
+                        load_session, REQUIRED, ARTIFACTS, budget_plan, portfolio_input, limit_input,
+                        preflight, _source_check)
 
 ROOT=Path(__file__).resolve().parents[1]
 FIXTURE=ROOT/'tests/fixtures/india/synthetic.csv'
@@ -29,6 +30,10 @@ class Team(unittest.TestCase):
         cls.now=timestamp('2026-10-19T09:35:00+05:30')
         cls.settings=dict(symbol='DEMO.NS',tick=.05,capital=100000,risk=500,rr=2,
                           as_of=cls.now.isoformat(),cost_config=None,calendar=DEFAULT_CALENDAR.document)
+        cls.metadata=dict(symbol='DEMO.NS',tick_size=.05,currency='INR',tick_unit='INR',
+                          effective_from='2026-10-01',effective_to='2026-10-31',
+                          published_at='2026-09-30T18:00:00+05:30',source='https://example.invalid/synthetic',fixture=True)
+        cls.settings['security_metadata']=cls.metadata
         cls.baseline=report(cls.bars,cls.now,'DEMO.NS',.05,100000,500)
         cls.history=[]
         day=dt.date(2026,9,1)
@@ -49,7 +54,8 @@ class Team(unittest.TestCase):
 
     def prepare(self, rich=False, **kwargs):
         return prepare((self.history if rich else [])+self.bars,self.settings,{'source':'SYNTHETIC TEST FIXTURE'},
-                       self.baseline,self.directory,simulations=8,**kwargs)
+                       self.baseline,self.directory,simulations=8,
+                       security_metadata=kwargs.pop('security_metadata',{'DEMO.NS':self.metadata}),**kwargs)
 
     def reviews(self, verdicts=None):
         """Explicit mock review fixtures; these are never native agent claims."""
@@ -83,6 +89,45 @@ class Team(unittest.TestCase):
         self.assertFalse(ticket['submitted']);self.assertFalse(ticket['filled'])
         self.assertFalse(evaluate(self.directory,'alerts')['data']['monitoring_started'])
         self.assertEqual(evaluate(self.directory,'timemachine')['data']['reason'],'INSUFFICIENT_HISTORY')
+
+    def test_preflight_flags_actual_roots_without_dispatch(self):
+        self.prepare(security_metadata={})
+        check=preflight(self.directory)
+        self.assertFalse(check['should_dispatch_specialists'])
+        self.assertEqual({x['code'] for x in check['issues']},{'TICK_UNVERIFIED','INSUFFICIENT_HISTORY'})
+        self.assertIn('tick_unverified',evaluate(self.directory,'risk')['data']['reasons'])
+        self.assertIsNone(evaluate(self.directory,'broker')['data']['order'])
+        with patch('india.team.code_hash',return_value='upgraded'):
+            self.assertFalse(preflight(self.directory)['same_engine'])
+            with self.assertRaisesRegex(ValueError,'Engine changed'): evaluate(self.directory,'scanner')
+
+    def test_rich_preflight_ready_still_needs_independent_reviews(self):
+        result=self.prepare(rich=True)
+        self.assertTrue(result['preflight']['should_dispatch_specialists'])
+        self.assertEqual(finalize(self.directory)['status'],'PENDING_AGENT_REVIEWS')
+
+    def test_tick_mismatch_and_real_symbol_fixture_cannot_clear(self):
+        self.prepare(rich=True,security_metadata={'DEMO.NS':dict(self.metadata,tick_size=.1)})
+        self.assertIn('tick_mismatch',evaluate(self.directory,'risk')['data']['reasons'])
+        self.assertIsNone(evaluate(self.directory,'exit')['data']['plan'])
+        from india.security import verify_tick
+        self.assertEqual(verify_tick('TCS.NS',.05,{'TCS.NS':dict(self.metadata,symbol='TCS.NS')})['status'],'UNVERIFIED')
+
+    def test_date_only_research_uses_end_of_day_bound_without_inventing_clock(self):
+        self.prepare()
+        context=read_json(self.directory/'context.json')
+        source=dict(url='https://nseindia.com/original',published_date='2026-10-18',
+                    publication_timezone='Asia/Kolkata',accessed_at=self.settings['as_of'])
+        self.assertTrue(_source_check([source],context))
+        for changes in (dict(published_date='2026-10-19'),dict(published_date='2026-10-20'),
+                        dict(publication_timezone=''),dict(publication_timezone='Unknown'),
+                        dict(accessed_at='2026-10-18T12:00:00+05:30'),
+                        dict(published_at=self.settings['as_of'])):
+            with self.subTest(changes=changes):
+                self.assertFalse(_source_check([dict(source,**changes)],context))
+        self.reviews()
+        self.change_review('analyst',sources=[source])
+        self.assertNotIn('analyst',finalize(self.directory)['invalid_reviews'])
 
     def test_reject_reusing_nonempty_session_directory(self):
         self.prepare()

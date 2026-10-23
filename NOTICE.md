@@ -2,7 +2,7 @@
 
 ## Software
 
-This project adapts Jake Schincariol's [day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill). The original MIT copyright notice remains in [LICENSE](LICENSE). Original US utilities retained under `legacy/` include the Wilder RSI implementation reused by the Indian workflow. Modifications include Indian-market providers and calculations, Codex coordination, research tooling and the React dashboard.
+This project adapts Jake Schincariol's [day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill). The original MIT copyright notice remains in [LICENSE](LICENSE). Original US utilities retained unchanged under `legacy/` supply the reused Wilder RSI and selected scanner, entry, exit, risk, alert and RSS rules. Explicit Indian adapters live in `workflow/`. Modifications include Indian-market providers and calculations, restored file-handoff commands, local paper accounting, Codex coordination, research tooling and the React dashboard.
 
 React, React DOM, Vite and their transitive dependencies retain their own licenses and notices. Dependency versions are locked in `dashboard/package-lock.json`; installation obtains their package license files. The animated agent desk illustrations are implemented in this repository as SVG/React components, without downloaded avatar artwork.
 

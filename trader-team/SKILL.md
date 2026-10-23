@@ -1,13 +1,19 @@
 ---
 name: trader-team
-description: Coordinate independent Codex specialist agents to review an NSE/BSE paper setup, with shared immutable evidence and a risk veto.
+description: Coordinate the original Indian day-trader toolchain or explicitly requested independent Codex specialist reviews.
 ---
 
-Run a cooperating specialist workflow when the user requests the full trading team, independent agent evaluation or the original day-trader workflow. For a single indicator or standalone role request, use the relevant modular skill directly.
+For the original day-trader workflow, read [Indian workflow commands](../docs/WORKFLOW.md) and use the modular specialist tools in one mutable workspace: scanner → news → entry → exit → timemachine → budget → risk → paper broker, with separate persisted alerts and financial/public-disclosure research. Use the user's provider, capital, risk, verified tick, stop/target choices and as-of time consistently. Require a current exact-order risk PASS before showing a ready paper ticket; obtain actual user consent before any simulated approval/fill. Missing optional research remains visible and must not be described as complete coverage. If the user requires evidence that is unavailable, report the incomplete task. A numerical risk PASS is not independent-team clearance.
+
+The original-style tools restore broad scans, level/ORB entries, configurable stops, polling, persistent alerts and a local paper ledger. They never place orders. Use the detailed role SKILL.md files for their commands. Do not replace a requested configured-rule workflow with the fixed-rule snapshot engine. For a single-role request, invoke that modular skill directly.
+
+## Explicit independent-agent review
+
+When the user explicitly requests independent specialists, individual agent decisions or dashboard lifecycle events, use the existing frozen-snapshot review mode below. Its numerical engine supports the fixed opening-range-low strategy and configurable R multiple. Explain that boundary if the user asks to independently review a midpoint/ATR/level plan; do not claim the sealed reviews validate a different plan. Native agents must be real host-spawned contexts, not role-labelled CLI outputs.
 
 Read [references/workflow.md](references/workflow.md) before running a team. It defines the dependencies, native delegation requirement, artifact contract and review schema. Resolve this directory through symlinks and execute `run.py` by absolute path. Require the instrument's verified tick size and use the user's capital, risk, provider and replay cutoff.
 
-Capture one immutable data snapshot with `prepare`; delegate each of the 10 required review roles to a distinct native Codex subagent; finalize only after all reviews exist and their identities, hashes and cutoffs match. Run scanner, news and analyst independently, then entry → exit → timemachine → budget → risk → broker → alerts. Retain the Pelosi compatibility role as NOT_APPLICABLE to Indian markets; it needs no mandatory agent spawn. Respect available agent slots and release completed agents when the host supports it.
+Capture one immutable data snapshot with `prepare`, supplying `--security-master FILE` with verified dated INR tick evidence. Inspect its returned `preflight` (or `preflight --session DIR`) before delegation. If `should_dispatch_specialists` is false, explain the root prerequisites and dependent no-trade outcomes, and resolve them or wait for an eligible signal before starting the ten-role chain. Do not spend a full team run on a closed-market/no-setup snapshot unless the user explicitly wants that diagnostic review. Team NSE preparation defaults to 60 days; require at least 20 complete prior sessions actually returned. When ready, delegate each of the 10 required review roles to a distinct native Codex subagent; finalize only after all reviews exist and their identities, hashes and cutoffs match. Run scanner, news and analyst independently, then entry → exit → timemachine → budget → risk → broker → alerts. Retain the Pelosi compatibility role as NOT_APPLICABLE to Indian markets; it needs no mandatory agent spawn. Respect available agent slots and release completed agents when the host supports it.
 
 Native agent delegation is required for independent evaluation. If the host does not expose it, report `MULTI_AGENT_UNAVAILABLE` and stop the team workflow; offer the ordinary standalone analysis without calling it a team. Shell subprocesses, role-labelled JSON from one model, and deterministic evidence are not independent agents.
 

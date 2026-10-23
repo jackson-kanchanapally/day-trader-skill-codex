@@ -17,10 +17,13 @@ After market hours a complete latest session can pass while its analysis is
 marked stale; PASS describes feed health, not permission to trade. Inspect
 `analysis.status`, `analysis.strategy_open` and `analysis.plan` separately.
 
-Fallback is used only when explicitly requested. Every attempt and the selected
-source are reported. Each report uses one entire snapshot; providers' candles
-are never spliced together. Switching providers/lookbacks can change indicators.
-Authentication/access denials remain visible; retries are bounded.
+Yahoo automatically falls back to NSE for `.NS` stocks when its snapshot is
+unavailable or unusable. `--no-fallback` disables this automatic choice;
+`--fallback-provider` adds explicit alternatives. Explicit NSE/Upstox selections
+do not automatically switch providers. Every attempt and selected source are
+reported. Each report uses one entire snapshot; candles are never spliced
+together or substituted across exchanges. Switching providers/lookbacks can
+change indicators. Authentication/access denials stay visible; retries are bounded.
 
 For machine-readable errors on other commands, add `--json-errors`. Exit 0 on
 `analyze` means a report was produced, including NO_SETUP or a blocked setup.
@@ -32,6 +35,10 @@ Successful commands can use `--record-db var/runs.sqlite`. Records contain the
 exact OHLCV snapshot, provider provenance, as-of time, calendar, cost overrides,
 strategy settings, result, input checksum and engine-code fingerprint. Tokens
 and environment contents are never copied into records.
+
+Engine updates can invalidate earlier sealed team sessions or archived code
+fingerprints. Prepare a new review after updating; do not relabel old artifacts
+as verified by the new implementation.
 
 Copy `run_id` from the report:
 

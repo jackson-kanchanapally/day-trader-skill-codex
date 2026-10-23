@@ -63,10 +63,14 @@ class CSVProvider:
 
 class YahooProvider:
     """Public, unofficial historical feed; never described as live or guaranteed."""
+    def __init__(self, extended_history=False):
+        self.extended_history = extended_history
+
     def history(self, symbol, interval):
         symbol_name(symbol)
         from urllib.parse import quote
-        path = '/v8/finance/chart/%s?range=%s&interval=%s' % (quote(symbol), '1mo' if interval == '1d' else '1d', interval)
+        window = '1mo' if interval == '1d' else '60d' if self.extended_history else '1d'
+        path = '/v8/finance/chart/%s?range=%s&interval=%s' % (quote(symbol), window, interval)
         last_error = 'unavailable'
         partial = None
         for host in ('query2', 'query1'):

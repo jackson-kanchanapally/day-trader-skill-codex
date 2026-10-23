@@ -23,8 +23,8 @@ class NSEProvider:
     def __init__(self, as_of, days=7):
         if as_of.tzinfo is None:
             raise ValueError('NSE as-of timestamp requires a timezone')
-        if not isinstance(days, int) or not 1 <= days <= 28:
-            raise ValueError('--days must be between 1 and 28')
+        if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= 120:
+            raise ValueError('--days must be between 1 and 120')
         self.as_of = as_of.astimezone(IST)
         self.days = days
         self._symbols = {}
@@ -74,16 +74,24 @@ class NSEProvider:
             self._symbols[name] = matches[0]
         info = self._symbols[name]
         self.provider_symbol = info['symbol']
-        start = (self.as_of-dt.timedelta(days=self.days)).replace(hour=0, minute=0, second=0, microsecond=0)
-        doc = self._get('/v1/charts/symbolHistoricalData', {
-            'token': str(info['scripcode']), 'fromDate': int(start.timestamp()) + OFFSET,
-            'toDate': int(self.as_of.timestamp()) + OFFSET,
-            'symbol': info['symbol'], 'symbolType': 'Equity',
-            'chartType': 'I' if interval == '5m' else 'D',
-            'timeInterval': 5 if interval == '5m' else 1,
-        })
-        bars = self.parse(doc, interval, self.as_of)
-        return validate([b for b in bars if b.time >= start])
+        start = (self.as_of-dt.timedelta(days=self.days-1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        # Keep each website request within the existing 28-day window. Request
+        # disjoint date ranges from the same source; never fill missing slots.
+        bars = []
+        cursor = start
+        while cursor <= self.as_of:
+            end = min(self.as_of, cursor + dt.timedelta(days=28) - dt.timedelta(seconds=1))
+            doc = self._get('/v1/charts/symbolHistoricalData', {
+                'token': str(info['scripcode']), 'fromDate': int(cursor.timestamp()) + OFFSET,
+                'toDate': int(end.timestamp()) + OFFSET,
+                'symbol': info['symbol'], 'symbolType': 'Equity',
+                'chartType': 'I' if interval == '5m' else 'D',
+                'timeInterval': 5 if interval == '5m' else 1,
+            })
+            rows = self.parse(doc, interval, end)
+            bars.extend(b for b in rows if cursor <= b.time <= end)
+            cursor = end + dt.timedelta(seconds=1)
+        return validate(bars)
 
     @staticmethod
     def parse(doc, interval, as_of):

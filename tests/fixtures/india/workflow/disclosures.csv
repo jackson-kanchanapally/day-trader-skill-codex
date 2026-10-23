@@ -1,0 +1,3 @@
+symbol,person,transaction_date,published_at,transaction_type,quantity,source
+DEMO.NS,Synthetic Director,2026-10-16,2026-10-19T09:00:00+05:30,buy,100,https://example.invalid/synthetic-public-disclosure
+DEMO.NS,Synthetic Director,2026-10-19,2026-10-19T10:00:00+05:30,sell,50,https://example.invalid/synthetic-future-disclosure

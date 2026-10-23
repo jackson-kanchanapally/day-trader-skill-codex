@@ -190,6 +190,23 @@ class Runtime(unittest.TestCase):
             self.assertEqual(main(),1)
             net.assert_not_called()
 
+    def test_yahoo_failure_defaults_to_nse_without_cross_exchange_substitution(self):
+        from india.nse import NSEProvider
+        from india.data import YahooProvider
+        args=['india','analyze','DEMO.NS','--tick','.05','--as-of',AT.isoformat(),'--json-errors']
+        with patch.object(YahooProvider,'history',side_effect=ValueError('synthetic Yahoo failure')), patch.object(NSEProvider,'history',return_value=bars()) as nse, patch.object(NSEProvider,'provider_symbol','DEMO-EQ',create=True):
+            with patch('sys.argv',args),patch('sys.stdout',new_callable=io.StringIO) as out:
+                self.assertEqual(main(),0)
+                result=json.loads(out.getvalue())
+                self.assertIn('NSE',result['source'])
+                self.assertEqual([r['provider'] for r in result['provider_attempts']],['yahoo','nse'])
+            nse.reset_mock()
+            for extra,symbol in ((['--no-fallback'],'DEMO.NS'),([], 'DEMO.BO')):
+                request=list(args);request[2]=symbol
+                with patch('sys.argv',request+extra),patch('sys.stdout',new_callable=io.StringIO):
+                    self.assertEqual(main(),1)
+            nse.assert_not_called()
+
 
 class Job(unittest.TestCase):
     def test_out_of_hours_and_holidays_make_no_requests(self):

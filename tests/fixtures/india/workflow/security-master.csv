@@ -1,0 +1,3 @@
+symbol,tick_size,currency,tick_unit,effective_from,effective_to,published_at,source,fixture
+DEMO.NS,0.05,INR,INR,2026-10-01,2026-10-31,2026-09-30T18:00:00+05:30,https://example.invalid/synthetic-security-master,true
+DEMO.BO,0.05,INR,INR,2026-10-01,2026-10-31,2026-09-30T18:00:00+05:30,https://example.invalid/synthetic-security-master,true

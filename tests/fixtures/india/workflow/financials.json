@@ -1,0 +1,12 @@
+{
+  "fixture": true,
+  "symbol": "DEMO.NS",
+  "currency": "INR",
+  "unit": "INR_million",
+  "basis": "consolidated",
+  "quarters": [
+    {"period_start":"2025-07-01","period_end":"2025-09-30","published_at":"2025-10-15T18:00:00+05:30","source":"https://example.invalid/synthetic-quarter-2025","revenue":100,"net_profit":10,"diluted_eps":1},
+    {"period_start":"2026-07-01","period_end":"2026-09-30","published_at":"2026-10-15T18:00:00+05:30","source":"https://example.invalid/synthetic-quarter-2026","revenue":110,"net_profit":12,"diluted_eps":1.2},
+    {"period_start":"2026-10-01","period_end":"2026-12-31","published_at":"2027-01-15T18:00:00+05:30","source":"https://example.invalid/synthetic-future-quarter","revenue":999,"net_profit":999,"diluted_eps":99}
+  ]
+}

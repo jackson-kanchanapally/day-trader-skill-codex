@@ -1,5 +1,7 @@
 # Specialist team and upstream parity
 
+This document describes the **sealed independent-review mode**, retained for native specialist reviews and the dashboard. The restored original-style Indian commands, configurable exits, alert state and local paper ledger are documented in [WORKFLOW.md](WORKFLOW.md). Its mutable handoffs and numerical paper-ticket status are separate from the strict final clearance described here.
+
 The [original MIT repository](https://github.com/Jakeschincariol/day-trader-skill) provides eleven cooperating skills with file handoffs. Its plugin manifest loads skills; it does not package a native independent-subagent runtime. The early Indian migration preserved the names but reduced most roles to the same analysis command. This version restores distinct handoffs and adds actual Codex delegation through `$trader-team`.
 
 ## What runs
@@ -43,7 +45,19 @@ Detailed dispatch instructions, prerequisite reviews, source rules and JSON sche
 
 The handoff filenames are `watchlist.json`, `news.json`, `entry.json`, `plan.json`, `timemachine.json`, `orders.json`, `state/risk.json`, `state/broker.json`, `alerts.json`, `metrics.json` and `disclosures.json`. Their schema is specific to this Indian paper workflow; original US consumers are not drop-in compatible. `context.json` seals settings, source, portfolio, limits and code hash; `snapshot.json` contains only completed observations available by the cutoff. `reviews/ROLE.json` holds independent agent decisions, and `report.json` is the combined result.
 
-The NSE adapter's maximum request is 28 calendar days, which usually supplies fewer than 20 complete prior trading sessions after excluding today and holidays. Increasing the simulation count cannot fix this. A full scenario review needs a longer, complete, consistently sourced CSV history collected separately; the short Yahoo request also cannot supply it. Ordinary intraday analysis still works without scenario clearance. News/analyst browsing must be available independently of the market-data adapter.
+Before dispatch, `prepare` now returns and saves `preflight.json`. You can inspect a saved snapshot without changing it:
+
+```sh
+python3 trader-team/run.py preflight --session trader/team/SESSION
+```
+
+Check `should_dispatch_specialists`. Closed strategy hours, missing/stale candles, no trigger, missing/mismatched tick metadata, insufficient history or budget limits are explained before ten reviews are started. A no-trade result does not mean the scanner failed. An archive from an older engine can be diagnosed, but its original reviews cannot clear a new engine or cutoff. Do not overwrite archived reviews.
+
+For team preparation, NSE defaults to 60 calendar days and supports 1–120 days using disjoint requests of at most 28 days each. Yahoo team requests use 60 days of five-minute history. Upstox retains its 28-day limit; select NSE or a longer authorized CSV for sufficient scenario history. Count the complete prior sessions actually returned: providers can still truncate history or fail. No gaps are filled and the 20-session minimum remains mandatory.
+
+Pass `--security-master FILE` to team preparation, using the dated, explicit INR schema in [WORKFLOW.md](WORKFLOW.md#security-metadata). The matching record is sealed in `context.json`. A supplied `--tick` alone no longer clears numerical team risk. Missing, mismatched or synthetic metadata for a real stock prevents an order even if reviewers vote PASS. The metadata file records supplied evidence; it is not independently authenticated by the engine.
+
+For research, an original source may have an exact timezone-aware `published_at`, or a verified `published_date` plus `publication_timezone` (IANA name). The latter uses the next local midnight as an upper bound and is accepted only once the entire publication date has ended before the cutoff and access time. This records date precision; it does not invent a publication clock. A document signing date alone does not establish its publication date. Unverifiable publication dates, same-day ambiguous timing and incomplete news coverage remain explicit limitations.
 
 ## Optional paper portfolio and limits
 

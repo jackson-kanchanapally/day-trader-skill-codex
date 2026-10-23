@@ -74,6 +74,25 @@ class NSE(unittest.TestCase):
         self.assertEqual(args['chartType'],['I'])
         self.assertEqual(args['timeInterval'],['5'])
 
+    def test_long_history_pages_nonoverlapping_windows_and_preserves_gaps(self):
+        source=NSEProvider(NOW,60)
+        requests=[]
+        def get(path, params):
+            if path.endswith('symbolsDynamic'): return SYMBOL
+            requests.append(params)
+            # One observed row in each window, leaving all other slots missing.
+            day=dt.datetime.fromtimestamp(params['fromDate'],dt.timezone.utc).date()
+            when=dt.datetime.combine(day,dt.time(9,15),dt.timezone.utc)
+            row=dict(time=when.timestamp()*1000,open=100,high=101,low=99,close=100,volume=1)
+            return {'status':True,'data':[row]}
+        with patch.object(source,'_get',side_effect=get):
+            bars=source.history('TCS.NS','5m')
+        self.assertEqual(len(requests),3)
+        self.assertEqual(len(bars),3)
+        self.assertTrue(all(a['toDate']+1==b['fromDate'] for a,b in zip(requests,requests[1:])))
+        self.assertTrue(all(r['toDate']-r['fromDate']<28*86400 for r in requests))
+        self.assertLessEqual(bars[-1].time,NOW)
+
     def test_wrong_symbol_and_bse_cannot_silently_be_substituted(self):
         wrong = copy.deepcopy(SYMBOL)
         wrong['data'][0]['symbol'] = 'TCSOTHER-EQ'
@@ -134,6 +153,6 @@ class NSE(unittest.TestCase):
                 if command == 'analyze': self.assertTrue(result['data_quality']['complete'])
 
     def test_invalid_configuration(self):
-        for days in (0,29):
+        for days in (0,121,True):
             with self.assertRaises(ValueError): NSEProvider(NOW,days)
         with self.assertRaises(ValueError): NSEProvider(NOW.replace(tzinfo=None))

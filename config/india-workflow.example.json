@@ -1,0 +1,22 @@
+{
+  "budget": 100000,
+  "cash_buffer_pct": 10,
+  "max_position_pct": 75,
+  "max_order_inr": 75000,
+  "min_order_inr": 1,
+  "max_loss_per_trade_inr": 500,
+  "max_daily_loss_inr": 1500,
+  "max_trades_per_day": 3,
+  "max_orders_per_day": 10,
+  "min_reward_risk": 1,
+  "no_entries_before": "09:30",
+  "no_entries_after": "15:00",
+  "flat_by": "15:10",
+  "fractional": false,
+  "paper": true,
+  "broker": "local-paper",
+  "blocked": [],
+  "allow_options": false,
+  "allow_margin": false,
+  "allow_short": false
+}

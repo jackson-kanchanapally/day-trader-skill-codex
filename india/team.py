@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import tempfile
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import uuid
 
 from .analysis import report, size
@@ -19,6 +20,7 @@ from .audit import code_hash, digest, encode_bars
 from .data import Bar, IST, timestamp, symbol_name, validate
 from .forecast import forecast
 from .market import Calendar, costs
+from .security import security_records, verify_tick
 
 ROLES = ('scanner','news','entry','exit','timemachine','budget','risk','broker','alerts','analyst','pelosi')
 REQUIRED = tuple(r for r in ROLES if r != 'pelosi')
@@ -110,14 +112,14 @@ def _payload(context, bars):
     return payload
 
 
-def load_session(directory, verify_artifacts=True):
+def load_session(directory, verify_artifacts=True, verify_engine=True):
     directory=Path(directory).resolve()
     context=read_json(directory/'context.json')
     snapshot=read_json(directory/'snapshot.json')
     if (context.get('schema_version')!=1 or snapshot.get('snapshot_id')!=context.get('snapshot_id')
             or digest(_payload(context,snapshot['bars']))!=context['snapshot_id']):
         raise ValueError('Team snapshot integrity mismatch; prepare a new session')
-    if context['code_sha256']!=code_hash():
+    if verify_engine and context['code_sha256']!=code_hash():
         raise ValueError('Engine changed since snapshot preparation; prepare a new session')
     if verify_artifacts:
         for role,path in ARTIFACTS.items():
@@ -150,6 +152,9 @@ def budget_plan(settings, baseline, portfolio, limits):
     if notional<=0: reasons.append('position_or_order_limit')
     if risk_room<=0: reasons.append('daily_loss_or_total_open_risk_limit')
     if baseline['status']!='PAPER_SETUP' or not plan: reasons.append('no_eligible_entry')
+    metadata=settings.get('security_metadata')
+    tick_check=verify_tick(symbol,settings['tick'],security_records([metadata],timestamp(settings['as_of'])) if metadata else {})
+    if tick_check['status']!='VERIFIED': reasons.append('tick_'+tick_check['status'].lower())
     sized=None
     if not reasons:
         sized=size(plan,min(cash,notional),risk_room,exchange,config)
@@ -176,12 +181,13 @@ def _role(role, context, verdict, summary, data):
 def _artifacts(context, bars, baseline, simulations, seed):
     s=context['settings'];now=timestamp(s['as_of']);cal=Calendar(s['calendar'])
     args=(s['symbol'],s['tick'],s['capital'],s['risk'],s['rr'],s['cost_config'],cal)
-    plan=baseline.get('plan')
-    valid=baseline['status']=='PAPER_SETUP'
+    tick_check=verify_tick(s['symbol'],s['tick'],{s['symbol']:s['security_metadata']} if s.get('security_metadata') else {})
+    plan=baseline.get('plan') if tick_check['status']=='VERIFIED' else None
+    valid=baseline['status']=='PAPER_SETUP' and plan is not None
     decisions={}
     decisions['scanner']=_role('scanner',context,'PASS' if baseline['data_quality']['complete'] else 'BLOCK',
         'Supplied-symbol opening-range scan; no automatic exchange-wide universe claim.',
-        {'watchlist':[s['symbol']],'candidates':[s['symbol']] if valid else [],'analysis':baseline})
+        {'watchlist':[s['symbol']],'candidates':[s['symbol']] if valid else [],'analysis':baseline,'tick_verification':tick_check})
     for role in ('news','analyst'):
         decisions[role]=_role(role,context,'UNAVAILABLE','Requires independently read exchange/issuer evidence available by as-of.',
                               {'items':[],'sources':[],'automated_filings_adapter':False})
@@ -231,10 +237,12 @@ def _artifacts(context, bars, baseline, simulations, seed):
 
 
 def prepare(bars, settings, provenance, analysis, directory=None, portfolio=None, limits=None,
-            simulations=10000, seed=17, issuer_domains=None):
+            simulations=10000, seed=17, issuer_domains=None, security_metadata=None):
     now=timestamp(settings['as_of'])
     settings=json.loads(json.dumps(settings))
     settings.update(simulations=simulations,seed=seed)
+    master=security_records(list((security_metadata or {}).values()),now)
+    settings['security_metadata']=master.get(settings['symbol'])
     domains=['nseindia.com','bseindia.com']
     for domain in issuer_domains or []:
         domain=domain.lower().strip()
@@ -262,7 +270,9 @@ def prepare(bars, settings, provenance, analysis, directory=None, portfolio=None
     write_json(directory/'snapshot.json',{'schema_version':1,'snapshot_id':context['snapshot_id'],'bars':serialized})
     write_json(directory/'context.json',context)
     write_json(directory/'delegations.json',{'schema_version':1,'snapshot_id':context['snapshot_id'],'agents':{}})
-    return {'mode':'team_prepared','status':'PENDING_AGENT_REVIEWS','session_dir':str(directory),
+    readiness=preflight(directory)
+    write_json(directory/'preflight.json',readiness)
+    return {'preflight':readiness,'mode':'team_prepared','status':'PENDING_AGENT_REVIEWS','session_dir':str(directory),
             'snapshot_id':context['snapshot_id'],'symbol':settings['symbol'],'as_of':settings['as_of'],
             'required_roles':list(REQUIRED),'artifacts':ARTIFACTS,
             'native_agents_started':False,'execution_enabled':False}
@@ -275,20 +285,87 @@ def evaluate(directory, role):
     return dict(artifact,artifact_sha256=context['artifact_hashes'][role])
 
 
+def _publication_upper_bound(source):
+    """Latest possible publication, with explicit precision and timezone.
+
+    A date-only source is usable only after that entire local date has ended.
+    This bound is not presented as an observed publication clock time.
+    """
+    if 'published_at' in source:
+        if 'published_date' in source or 'publication_timezone' in source:
+            raise ValueError('Use either an exact timestamp or a date and timezone')
+        return timestamp(source['published_at'])
+    day=dt.date.fromisoformat(source['published_date'])
+    zone=ZoneInfo(source['publication_timezone'])
+    return dt.datetime.combine(day+dt.timedelta(days=1),dt.time(),zone).astimezone(IST)
+
+
 def _source_check(sources, context):
     if not isinstance(sources,list) or not sources: return False
     now=timestamp(context['settings']['as_of'])
     domains=context['settings']['trusted_source_domains']
     for source in sources:
         if not isinstance(source,dict): return False
-        parsed=urlparse(source.get('url',''))
-        host=(parsed.hostname or '').lower()
-        if parsed.scheme!='https' or parsed.username or not any(host==d or host.endswith('.'+d) for d in domains): return False
         try:
-            published=timestamp(source['published_at']);accessed=timestamp(source['accessed_at'])
-        except (ValueError,TypeError,KeyError): return False
-        if published>now or accessed<published: return False
+            parsed=urlparse(source.get('url',''))
+            host=(parsed.hostname or '').lower()
+            if parsed.scheme!='https' or parsed.username or not any(host==d or host.endswith('.'+d) for d in domains): return False
+            upper=_publication_upper_bound(source);accessed=timestamp(source['accessed_at'])
+        except (ValueError,TypeError,KeyError,ZoneInfoNotFoundError): return False
+        if upper>now or accessed<upper: return False
     return True
+
+
+def preflight(directory):
+    """Read-only readiness diagnosis, including archives from older engines.
+
+    Verify sealed data/artifact hashes but never refresh or clear an old review.
+    Current evaluate/finalize still require an exact engine match.
+    """
+    directory=Path(directory).resolve()
+    context,_=load_session(directory,verify_engine=False)
+    s=context['settings'];now=timestamp(s['as_of']);cal=Calendar(s['calendar'])
+    baseline=read_json(directory/ARTIFACTS['scanner'])['data']['analysis']
+    machine=read_json(directory/ARTIFACTS['timemachine'])['data']
+    metadata=s.get('security_metadata')
+    tick=verify_tick(s['symbol'],s['tick'],security_records([metadata],now) if metadata else {})
+    complete=machine['data']['prior_complete_sessions']
+    minimum=machine['data']['minimum_sessions']
+    issues=[]
+    if not baseline['strategy_open']:
+        issues.append({'code':'OUTSIDE_STRATEGY_WINDOW','action':'Wait for an eligible session; use an explicit historical cutoff only for a labelled replay.'})
+    if not baseline['data_quality']['complete']:
+        issues.append({'code':'INCOMPLETE_CANDLES','action':'Obtain the missing completed bars from one consistent source.'})
+    if baseline['stale'] and baseline['strategy_open']:
+        issues.append({'code':'STALE_CANDLES','action':'Obtain fresh completed candles before preparing another session.'})
+    if tick['status']!='VERIFIED':
+        issues.append({'code':'TICK_'+tick['status'],'action':'Supply --security-master with the applicable dated INR tick; do not infer raw units.'})
+    if complete<minimum:
+        issues.append({'code':'INSUFFICIENT_HISTORY','action':'Request --days 60 with NSE, or supply complete authorized CSV history; keep the 20-session minimum.'})
+    if baseline['strategy_open'] and not baseline['stale'] and baseline['status']=='NO_SETUP':
+        issues.append({'code':'NO_SETUP','action':'Wait for a completed-bar trigger; a working scan need not find a trade.'})
+    next_window=None
+    exchange='NSE' if s['symbol'].endswith('.NS') else 'BSE'
+    for offset in range(15):
+        day=now.date()+dt.timedelta(days=offset)
+        opening=dt.datetime.combine(day,dt.time(9,35),IST)
+        if opening<=now: continue
+        try:
+            if cal.trading_day(day,exchange):
+                next_window=opening.isoformat();break
+        except ValueError: break
+    same_code=context['code_sha256']==code_hash()
+    return {'mode':'team_preflight','snapshot_id':context['snapshot_id'],'as_of':s['as_of'],
+            'same_engine':same_code,'status':'PREREQUISITES_READY' if not issues and same_code else 'NOT_READY',
+            'should_dispatch_specialists':not issues and same_code,
+            'analysis_status':baseline['status'],'market_open':baseline['market_open'],
+            'strategy_open':baseline['strategy_open'],'data_quality':baseline['data_quality'],
+            'tick_verification':tick,'history':{'complete_prior_sessions':complete,'minimum_sessions':minimum,
+                                              'shortfall':max(0,minimum-complete)},
+            'issues':issues,'next_potential_signal_cutoff':next_window,
+            'research':'Independent source review still required; readiness is not trade clearance.',
+            'dependent_roles_without_entry':['exit','budget','risk','broker','alerts'] if not baseline.get('plan') or tick['status']!='VERIFIED' else [],
+            'execution_enabled':False}
 
 
 def finalize(directory):
@@ -371,10 +448,11 @@ def main(argv=None):
     evaluate_parser=sub.add_parser('evaluate')
     evaluate_parser.add_argument('--session',required=True)
     evaluate_parser.add_argument('--role',choices=ROLES,required=True)
+    check=sub.add_parser('preflight');check.add_argument('--session',required=True)
     final=sub.add_parser('finalize');final.add_argument('--session',required=True)
     a=parser.parse_args(args)
     try:
-        result=evaluate(a.session,a.role) if a.command=='evaluate' else finalize(a.session)
+        result=evaluate(a.session,a.role) if a.command=='evaluate' else preflight(a.session) if a.command=='preflight' else finalize(a.session)
         print(json.dumps(result,indent=2,allow_nan=False))
         return 0
     except (ValueError,OSError,TypeError,KeyError,IndexError) as exc:

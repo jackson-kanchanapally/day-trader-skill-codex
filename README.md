@@ -1,8 +1,8 @@
 # Indian Trading Agents for Codex
 
-A paper-trading research toolkit for NSE/BSE equities, with independent Codex specialists and a React dashboard that shows their work.
+A Codex adaptation of the original **day-trader-skill** for NSE/BSE equities: modular trading tools, INR risk calculations, local paper records, and optional independent specialists with a React dashboard.
 
-Python validates market data and calculates indicators, setups, costs and position sizes. Codex runs independent specialist reviews against one frozen snapshot. The dashboard displays their recorded activity and decisions.
+Codex follows the skills and runs Python tools. The original-style workflow passes files from scanning through entry, exit, simulation, sizing, risk and a paper ticket. The separate independent-review mode freezes numerical evidence and records actual specialist decisions for the dashboard.
 
 **Status: experimental research software. Live order execution is disabled. No profitability, real-time-feed or production-readiness claim is made.**
 
@@ -10,17 +10,20 @@ Python validates market data and calculates indicators, setups, costs and positi
 
 ## What it does
 
-- Five-minute OHLCV analysis using completed candles and an explicit analysis cutoff.
+- Cash-equity universe discovery, multi-symbol daily setup scans and opening-range scans.
+- Completed-bar ORB/price-level entries and bounded foreground polling on supported intervals.
 - Approximate candle VWAP, Wilder RSI14, EMA9/EMA21 and relative volume.
-- Long-only opening-range breakouts with tick-rounded entry, stop and target levels.
+- Midpoint, range-low, ATR, percentage and explicit-price stops with tick-rounded targets.
 - Cash-funded whole-share sizing in INR, including estimated charges and slippage.
 - Next-bar historical replay, chronological holdout research and cost stress scenarios.
 - Seeded scenario resampling when at least 20 complete prior sessions are available.
 - Ten independent Codex reviewers, shared evidence files and a final risk veto.
 - A black-themed React dashboard with animated, clickable specialist desks.
 - Snapshot archives, offline numerical replay, data-health checks and bounded scheduled checks.
+- Persistent once-only price/time alerts and a transactional SQLite local paper ledger.
+- Dated RSS news, sourced financial-export analysis and optional Indian public-insider exports.
 
-It does not submit orders, reconcile broker accounts, guarantee fills, discover every listed stock or run a background notification service.
+It does not submit orders, reconcile broker accounts, guarantee fills or run an implicit background notification service. The Indian source integrations and broker boundary differ from upstream; see the [feature map and complete workflow](docs/WORKFLOW.md).
 
 ![Animated specialist desks in the black-themed React dashboard](docs/images/agent-desks.png)
 
@@ -37,7 +40,15 @@ It does not submit orders, reconcile broker accounts, guarantee fills, discover 
 
 Run commands from the repository root. A virtual environment is optional; the Python runtime has no external package dependencies. Node is needed to build the dashboard, but not to serve an already built frontend.
 
-## 1. Try the offline demo
+## 1. Run the original-style workflow
+
+The active tool names now match upstream: `scan.py`, `entry.py`, `exit.py`, `timemachine.py`, `size.py`, `check.py`, `ticket.py`, `alerts.py`, `news.py`, `facts.py` and `ptr.py`. All eleven preserved US originals remain unchanged in `legacy/`; Indian adapters reuse their working rules rather than invoking US market commands.
+
+Follow the [complete offline command example](docs/WORKFLOW.md#run-the-complete-offline-paper-example). It produces a fictional `DEMO.NS` midpoint-stop plan at ₹102.30 / ₹99.95 / ₹107.00, sizes **195 shares**, checks estimated loss including costs of **₹498.88**, and shows `READY_PAPER_TICKET` without approval or execution. It also persists stop, target and flatten alerts. The short fixture correctly reports insufficient simulation history.
+
+Use `$trader-team` in Codex for this cooperating toolchain, or invoke any specialist directly. `--workspace DIR` isolates file handoffs; `config/india-workflow.example.json` supplies illustrative INR limits. See [commands, input schemas, market boundaries and paper accounting](docs/WORKFLOW.md).
+
+### Existing standalone numerical demo
 
 The bundled `DEMO.NS` fixture is synthetic. This command needs no network, broker account, Codex session or API key:
 
@@ -166,7 +177,7 @@ The row above is synthetic. Real inputs must be chronological, unique and comple
 | NSE charting website | `--provider nse` | Experimental website adapter, `.NS` only; permission and terms must be reviewed before use |
 | Upstox V3 | `--provider upstox` | Account, local token and appropriate API/data permissions required |
 
-NSE and Upstox requests support `--days 1` through `--days 28`, default 7. Yahoo requests a short intraday window. Twenty-eight calendar days generally do not provide 20 complete **prior trading sessions**, so full scenario review may require longer, consistently sourced CSV history. No automatic historical accumulation is implemented.
+NSE supports `--days 1` through `--days 120` in disjoint requests of at most 28 days; team preparation defaults to 60 days and Yahoo team requests also use 60-day intraday history. Upstox remains limited to 28 days. The 20 complete **prior trading sessions** are counted from actual returned bars; gaps and provider truncation remain explicit. Team preparation accepts `--security-master FILE` for dated INR ticks and returns a readiness check before agent dispatch. Inspect a saved session with `python3 trader-team/run.py preflight --session PATH`; see [team prerequisites](docs/TEAM.md).
 
 The NSE adapter's technical availability does not establish authorization to scrape or use website data for simulations. [NSE terms](https://www.nseindia.com/static/nse-terms-of-use) expressly restrict automated collection and virtual-trading/simulation reuse. Use an authorized data source for your intended purpose. See [third-party notices](NOTICE.md).
 
@@ -180,9 +191,11 @@ python3 -m india analyze "$SYMBOL" --provider upstox \
 
 Upstox reads `UPSTOX_ANALYTICS_TOKEN`, then `UPSTOX_ACCESS_TOKEN`, from the environment. Configure credentials privately; do not put them in commands, chat, reports or version control. Access conditions and token validity are determined by [Upstox](https://upstox.com/developer/api-documentation/).
 
-Provider failures stay explicit. Missing candles are not fabricated or forward-filled. `--fallback-provider` is opt-in and selects whole snapshots; the adapters do not merge data from different providers. No lifetime-free or real-time service availability is promised.
+Provider failures stay explicit. Yahoo automatically falls back to the existing NSE adapter for `.NS` stocks when a usable snapshot is unavailable. Use `--no-fallback` to disable that automatic behavior, or `--provider nse` to select NSE directly. The restored tools apply this fallback to five-minute/daily candles; NSE does not supply one-minute candles in this implementation. `--fallback-provider` adds explicit alternatives to the `india` CLI. Each attempt and selected source is reported; candles from different providers are never merged. `.BO` stocks are never substituted with NSE quotes: use a matching BSE-capable source such as configured Upstox or authorized CSV when Yahoo fails. No direct BSE website OHLCV adapter or lifetime-free availability guarantee is claimed.
 
 ## Analysis rules and result states
+
+This section describes the existing `python3 -m india` numerical engine and sealed independent-review mode. The restored original-style tools support configurable entry/exit rules, and their `READY_PAPER_TICKET` means a current numerical risk check passed. It does not claim completion of ten independent reviews. See [workflow boundaries](docs/WORKFLOW.md#independent-agents-and-dashboard).
 
 The current strategy is the first completed five-minute close above the 09:15–09:30 opening range. The stop uses its low; the default target is 2R, configurable with `--rr`. The strategy is long-only, cash-funded and uses whole shares.
 
@@ -256,8 +269,8 @@ For React development, run `python3 -m dashboard` and, in another terminal, `npm
 - Automatic tick verification and normalization are not implemented. An unresolved tick blocks independent clearance.
 - Built-in holiday coverage is 2026; uncovered years fail closed. BSE currently shares the bundled calendar and needs exchange-specific verification. Special sessions are unsupported.
 - No multi-asset backtest, short selling, derivatives, leverage, delivery-cost model or automatic broker reconciliation.
-- No persistent fills/portfolio ledger, notification delivery or built-in background alert monitor.
-- No automated filings adapter or exchange-wide stock discovery. News/analyst review requires accessible, dated original sources.
+- The new original-style workflow has a local paper ledger and persistent alert state; the sealed independent-review engine still consumes supplied snapshots. Neither provides notification delivery or an implicit background monitor.
+- Indian financial/disclosure tools require sourced authorized exports. RSS coverage is incomplete; no complete automatic exchange-filings ingestion is claimed. Directory discovery does not guarantee coverage or price availability.
 - Small samples, corporate actions, liquidity, market impact, selection bias and regime changes limit historical conclusions.
 
 ## Contributing and security
@@ -270,6 +283,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for focused changes and validation. Repor
 
 ```text
 india/             Providers, numerical analysis, risk, research and run archives
+workflow/          Original-style Indian tools, file handoffs and local paper ledger
 dashboard/         React UI, animated agent desks and read-only local HTTP server
 trader-*/          Modular skills, portable runners and coordinator instructions
 codex-agents/      Optional named Codex specialist profiles
@@ -282,7 +296,7 @@ install_codex.py   Conflict-checking skill-link installer
 
 ## License and attribution
 
-Software is [MIT licensed](LICENSE), adapted from [Jake Schincariol's day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill). The original copyright and license are retained. The archived US utilities support regression coverage; this is not full US integration parity or an official OpenAI, NSE, BSE, Yahoo or Upstox product.
+Software is [MIT licensed](LICENSE), adapted from [Jake Schincariol's day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill). The original copyright and license are retained. Preserved US utilities supply regression coverage and selected reusable rules for the Indian adapters. This is not full US integration parity or an official OpenAI, NSE, BSE, Yahoo or Upstox product.
 
 Third-party market data, news, filings, trademarks and dependencies retain their respective rights. See [NOTICE.md](NOTICE.md). The MIT license is not a grant of data-provider permissions.
 

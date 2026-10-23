@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Synthetic headlines: no real issuer</title>
+<item><guid>synthetic-results</guid><title>DEMO synthetic quarterly results</title><link>https://example.invalid/synthetic-results</link><description>Original test fixture, not real news.</description><pubDate>Mon, 19 Oct 2026 03:30:00 GMT</pubDate></item>
+<item><guid>synthetic-future</guid><title>Future fixture must be excluded</title><link>https://example.invalid/synthetic-future</link><pubDate>Mon, 19 Oct 2026 05:00:00 GMT</pubDate></item>
+</channel></rss>
