@@ -2,19 +2,19 @@
 
 Modular OpenAI Codex skills for **NSE/BSE stock analysis, historical replay, and paper-trading reports**. Python performs the calculations; Codex runs the tools and explains the results.
 
-**Free public Yahoo data is the default. No broker account, market-data subscription, or API key is required for that workflow. Live order execution is disabled.**
+**Free public Yahoo data is the default; direct NSE website data is available with `--provider nse`. Neither requires a broker account, market-data subscription, or API key. Live order execution is disabled.**
 
 The Python CLI runs independently of Codex and makes no AI API calls. Codex access, internet, and hosting are separate. Public data can be delayed, incomplete, or unavailable; continued free access is not guaranteed.
 
 ## Features
 
 - Five-minute intraday analysis and daily historical OHLCV retrieval.
-- Session VWAP, Wilder RSI14, EMA9/EMA21, and relative volume.
+- Candle-based VWAP, Wilder RSI14, EMA9/EMA21, and relative volume.
 - Opening-range breakout detection using completed candles.
 - Tick-rounded entry, stop, and target levels.
 - Whole-share position sizing in INR with estimated costs and slippage.
 - Historical replay with next-bar entry and conservative exit handling.
-- Yahoo, offline CSV, and optional Upstox V3 data providers.
+- Yahoo, direct NSE charts, offline CSV, and optional Upstox V3 data providers.
 - Eleven modular Codex skills with portable command-line runners.
 
 ## Requirements
@@ -90,19 +90,51 @@ python3 -m india backtest RELIANCE.NS --tick 0.05 --capital 100000 --risk 500
 
 Use `.NS` for NSE symbols, such as `RELIANCE.NS`, and `.BO` for BSE symbols/codes, such as `500325.BO`. Provider coverage can differ.
 
-Yahoo requests the latest five days of five-minute candles or one month of daily candles. It uses `query2` and `query1` hosts with bounded retries. An alternate host may provide a complete response, but this is not an independent data source. Missing candles are never invented or forward-filled.
+Yahoo requests the latest available session of five-minute candles (`range=1d`) or one month of daily candles. It uses `query2` and `query1` hosts with bounded retries. If a response contains an internal gap, it tries the alternate host for an intact response. The two hosts are not independent data sources. Missing candles are never invented or forward-filled.
 
-`--as-of` enables historical replay and filters available candles. It cannot retrieve arbitrary older Yahoo history. Use matching CSV data or the optional Upstox provider for another date range.
+If a candle is absent inside the 09:15-15:15 strategy window, analysis returns a partial paper report with `status: BLOCKED_INCOMPLETE_DATA` and `plan: null`. `data_quality.missing_bars` identifies the missing slots. Indicators use only uninterrupted candles from the session open up to the first gap; `indicators_as_of` shows their cutoff. `last_bar` identifies the newest received strategy candle and may be later than the indicator cutoff. Partially populated candles still fail validation with the timestamp and missing fields. A successful command means the report was produced; it does not mean a trade is eligible.
+
+After market hours the report shows `market_open: false`; old candles are marked stale. To explicitly replay today's data before a later gap, use a matching timestamp, for example:
+
+```bash
+python3 -m india analyze TCS.NS --tick 0.05 --capital 100000 --risk 500 \
+  --as-of 2026-10-23T10:00:00+05:30
+```
+
+This is historical replay, not a live quote. The date must fall within the provider's available session. Backtests continue to reject internal gaps rather than produce results across missing bars.
+
+`--as-of` enables historical replay and filters available candles. It cannot retrieve arbitrary older Yahoo history. NSE supports a bounded date request, subject to website retention; CSV and Upstox are other options.
+
+### Direct NSE website data: no account or token
+
+```bash
+python3 -m india analyze TCS.NS --provider nse --tick 0.05 --capital 100000 --risk 500
+python3 -m india history TCS.NS --provider nse --tick 0.05 --days 28
+python3 -m india backtest TCS.NS --provider nse --tick 0.05 --capital 100000 --risk 500
+
+# Explicit historical replay, verified against actual NSE data on this date.
+python3 -m india analyze TCS.NS --provider nse --tick 0.05 \
+  --as-of 2026-10-23T10:30:00+05:30
+```
+
+The adapter reads the JSON endpoints behind [NSE Technical Charting](https://charting.nseindia.com/). It resolves the exact NSE equity symbol and token, requests five-minute or daily bars, and converts the website's IST wall-clock timestamps to timezone-aware candle opening times. No third-party packages are required. Symbol lookups are cached within the provider instance. Transient HTTP/network failures retry once; access denials stop immediately. No proxy rotation, CAPTCHA bypass, paid feed, or silent provider switching is used.
+
+Use `.NS` symbols; this adapter does not support `.BO` securities. `--days` selects 1-28 calendar days, default 7. Requested dates remain subject to the website's available history. Missing, invalid and duplicate candles are checked. Indicator warmup depends on the requested lookback.
+
+Website OHLCV values are preserved as published. Opening-candle auction treatment, volume and OHLC aggregation can differ from Yahoo; do not mix snapshots or assume matching indicator values across providers. VWAP is an approximation using candle typical prices and reported bar volumes, rather than a reconstruction from every exchange trade. Website access, schemas, retention and freshness are not guaranteed; this is not an exchange subscription feed.
+
+Actual online checks on 23 October 2026 returned complete 72-bar strategy sessions for TCS and RELIANCE. TCS replay at 10:30 returned 15 completed current-session bars, and its seven-calendar-day paper backtest completed. These checks establish observed access, not continuous availability or profitability.
 
 ## Data providers
 
 | Provider | Selection | Access | Notes |
 | --- | --- | --- | --- |
 | Yahoo | Default, or `--provider yahoo` | No account or API key | Unofficial public feed; may lag or fail |
+| NSE website | `--provider nse` | No account or API key | Direct public charts; `.NS` equities, 5m/1d, website availability limits |
 | CSV | `--csv PATH` | Offline, no credentials | User-supplied OHLCV; overrides online provider selection |
 | Upstox V3 | `--provider upstox` | Account and local token | Documented broker-data endpoints |
 
-The program never silently switches between Yahoo and Upstox. If the selected source fails validation, it reports the problem.
+The program never silently switches between providers. If the selected source fails validation, it reports the problem.
 
 ### CSV format
 
@@ -130,7 +162,7 @@ python3 -m india history RELIANCE.NS --provider upstox --tick 0.05 --days 28
 python3 -m india backtest RELIANCE.NS --provider upstox --tick 0.05 --days 14
 ```
 
-`--days` applies only to Upstox: 1-28 calendar days, default 7. The adapter combines historical and current-day endpoints when appropriate, resolves equities through the instrument master, and retries transient failures at most three times. Authentication failures do not retry.
+`--days` applies to NSE and Upstox: 1-28 calendar days, default 7. The Upstox adapter combines historical and current-day endpoints when appropriate, resolves equities through the instrument master, and retries transient failures at most three times. Authentication failures do not retry.
 
 To reuse a downloaded master, supply `--instruments /path/to/NSE.json.gz`. JSON and compressed JSON are supported; keep the file current. Tick size remains an explicit INR input.
 
@@ -160,6 +192,8 @@ News and financial-report skills guide source reading; automated Indian filings 
 
 The intraday setup is the first completed five-minute close above the 09:15-09:30 opening range. The stop uses the opening-range low. The default target is 2R, configurable with `--rr`.
 
+Analysis and backtesting use a conservative **09:15-15:15 IST strategy window for all equities**, including stocks that can trade continuously later. From August 2026, eligible NSE stocks enter the [Closing Auction Session](https://www.nseindia.com/static/products-services/closing-auction-session) at 15:15. Auction rows are excluded rather than interpreted as ordinary five-minute candles. A missing 15:20 row therefore does not invalidate this strategy's data. Reports expose `analysis_window` and `strategy_open`; `market_open` is the broad cash-market calendar check, not proof that a particular stock is in continuous trading.
+
 Position sizing uses whole shares, available capital, and the specified risk budget including estimated stop-exit costs. A proposed trade must also meet a net reward/risk floor of 1. Default capital is ₹100,000 and default risk is ₹500; pass your own values explicitly.
 
 Reports include source, timestamps, stale status, indicators, proposed levels, estimated costs, quantity, and paper status. RSI requires warmup; EMA uses first-close seeding. A signal timestamp denotes the bar opening time; confirmation occurs at its close.
@@ -177,13 +211,13 @@ python3 -m india backtest DEMO.NS \
   --tick 0.05 --capital 100000 --risk 500
 ```
 
-Signals use only preceding and current completed bars. Entries fill at the next bar's open. When a candle touches both stop and target, the stop is evaluated first. Gap-through-stop exits and estimated trading costs are included. Unresolved trades are omitted when sufficient exit data is unavailable.
+Signals use only preceding and current completed bars. Entries fill at the next bar's open. When a candle touches both stop and target, the stop is evaluated first. Gap-through-stop exits and estimated trading costs are included. Remaining paper positions exit at the 15:10 candle's close (15:15), before the closing auction. Unresolved trades are omitted when sufficient exit data is unavailable.
 
 This is fixed-budget, per-trade replay. It does not simulate portfolio equity, simultaneous exposure, daily-loss enforcement, or compounding. A short backtest does not establish profitability.
 
 ## Limitations
 
-- Regular sessions use IST 09:15-15:30, with an entry cutoff of 15:15.
+- The strategy uses IST 09:15-15:15. It excludes closing auctions and the final 15 minutes of non-auction stocks; it does not infer security-specific auction eligibility.
 - The intraday calendar supports 2026 only; unsupported years fail closed. Special/Muhurat sessions are excluded.
 - BSE uses the common cash-equity calendar here; verify exchange-specific exceptional closures. Calendar reference: [NSE holidays](https://www.nseindia.com/resources/exchange-communication-holidays).
 - Free public data is not a guaranteed real-time feed. If both Yahoo hosts fail, retry later or provide complete CSV data.
@@ -198,7 +232,7 @@ This project is research and paper-trading software, not financial advice or an 
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests
 ```
 
-The latest code validation passed **325 tests**. Coverage includes indicators, historical replay, stale/missing data, market hours, costs, look-ahead prevention, provider errors/retries, and installed Codex runners. Tests run offline using fixtures and mocks; passing tests does not establish online feed availability.
+Coverage includes indicators, historical replay, stale/missing data, market hours, costs, look-ahead prevention, NSE wall-clock conversion, exact symbol matching, auction exclusion, provider errors/retries, and installed Codex runners. Tests run offline using fixtures and mocks, including captured NSE and Yahoo responses; passing tests does not establish online feed availability.
 
 ## Repository layout
 

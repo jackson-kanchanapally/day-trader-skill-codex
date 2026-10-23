@@ -7,6 +7,11 @@ from pathlib import Path
 from .data import IST, validate
 from .market import session, costs
 
+# A strategy window, deliberately conservative for all equities. Since August
+# 2026 eligible stocks enter NSE's closing auction at 15:15; auction updates
+# must not be interpreted as continuous five-minute trading candles.
+ANALYSIS_END = dt.time(15,15)
+
 # Reuse the original tested Wilder RSI implementation.
 _spec = importlib.util.spec_from_file_location('legacy_scan', Path(__file__).resolve().parents[1] / 'legacy/trader-scanner/scan.py')
 _scan = importlib.util.module_from_spec(_spec)
@@ -26,6 +31,8 @@ def completed(bars, as_of, minutes):
     return bars
 
 def indicators(bars):
+    if not bars:
+        return dict.fromkeys(('rsi14','ema9','ema21','vwap','volume_spike'))
     closes = [b.close for b in bars]
     today = [b for b in bars if b.time.date() == bars[-1].time.date()]
     volume = sum(b.volume for b in today)
@@ -74,23 +81,42 @@ def size(plan, capital, risk, exchange, config):
 def report(bars, as_of, symbol, tick, capital, risk, rr=2., config=None):
     if not all(math.isfinite(x) and x > 0 for x in (tick,capital,risk,rr)):
         raise ValueError('tick, capital, risk and reward/risk must be positive finite numbers')
-    bars = completed(bars,as_of,5)
+    bars = completed([b for b in bars if b.time.astimezone(IST).time() < ANALYSIS_END],as_of,5)
     today = [b for b in bars if b.time.date() == bars[-1].time.date()]
-    if any(b.time-a.time != dt.timedelta(minutes=5) for a,b in zip(today,today[1:])):
-        raise ValueError('Missing intraday bars')
-    stale = (as_of-bars[-1].time-dt.timedelta(minutes=5)).total_seconds() > 600
-    eligible = session(as_of) and not stale and as_of.astimezone(IST).time() < dt.time(15,15)
+    if any(b.time.second or b.time.microsecond or b.time.minute % 5 for b in today):
+        raise ValueError('Intraday candles must start on the five-minute grid')
+    start = dt.datetime.combine(today[0].time.date(),dt.time(9,15),IST)
+    end = min(as_of.astimezone(IST),start.replace(hour=ANALYSIS_END.hour,minute=ANALYSIS_END.minute))
+    expected = [start+dt.timedelta(minutes=5*i)
+                for i in range(max(0,int((end-start).total_seconds()//300)))]
+    received = {b.time for b in today}
+    missing = [t for t in expected if t not in received]
+    # Indicators on a broken time series would hide the feed problem. Use only
+    # the continuous prefix from the session open and show its exact cutoff.
+    usable = [b for b in today if b.time < missing[0]] if missing else bars
+    stale = not usable or (as_of-usable[-1].time-dt.timedelta(minutes=5)).total_seconds() > 600
+    eligible = not missing and session(as_of) and not stale and as_of.astimezone(IST).time() < dt.time(15,15)
     plan = proposal(bars,tick,rr) if eligible else None
     sized = size(plan,capital,risk,'NSE' if symbol.endswith('.NS') else 'BSE',config) if plan else None
-    if sized and (sized['qty'] == 0 or sized['net_reward_risk'] < 1):
+    if missing:
+        status = 'BLOCKED_INCOMPLETE_DATA'
+    elif sized and (sized['qty'] == 0 or sized['net_reward_risk'] < 1):
         status = 'BLOCKED_COST_OR_RISK'
     else:
         status = 'PAPER_SETUP' if sized else 'NO_SETUP'
     return {'symbol':symbol,'mode':'paper','execution_enabled':False,'as_of':as_of.isoformat(),
             'last_bar':bars[-1].time.isoformat(),'stale':stale,'status':status,
-            'indicators':indicators(bars),'plan':sized}
+            'indicators':indicators(usable),'plan':sized,
+            'indicators_as_of':(usable[-1].time+dt.timedelta(minutes=5)).isoformat() if usable else None,
+            'data_quality':{'complete':not missing,'expected_bars':len(expected),
+                            'received_bars':len(today),'usable_session_bars':sum(b.time.date()==today[0].time.date() for b in usable),
+                            'missing_bars':[t.isoformat() for t in missing]},
+            'market_open':session(as_of),
+            'analysis_window':{'start':'09:15','end':'15:15','timezone':'Asia/Kolkata'},
+            'strategy_open':session(as_of) and as_of.astimezone(IST).time() < ANALYSIS_END}
 
 def backtest(bars, symbol, tick, capital, risk, rr=2., config=None):
+    bars = [b for b in bars if b.time.astimezone(IST).time() < ANALYSIS_END]
     validate(bars)
     if not all(math.isfinite(x) and x > 0 for x in (tick,capital,risk,rr)):
         raise ValueError('Invalid backtest parameters')
@@ -114,7 +140,7 @@ def backtest(bars, symbol, tick, capital, risk, rr=2., config=None):
                 exit_price=min(x.open,p['stop']); break
             if x.high >= p['target']:
                 exit_price=p['target']; break
-            if x.time.time() >= dt.time(15,15):
+            if x.time.time() >= dt.time(15,10):
                 exit_price=x.close; break
         if exit_price is None: continue  # incomplete session, never invent a close
         fee=costs(p['entry'],exit_price,p['qty'],'NSE' if symbol.endswith('.NS') else 'BSE',config)['total']

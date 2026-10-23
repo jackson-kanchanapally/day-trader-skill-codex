@@ -3,13 +3,92 @@ import json
 import os
 import unittest
 import urllib.error
+import datetime as dt
+from pathlib import Path
 from unittest.mock import patch
-from india.data import YahooProvider
+from india.data import YahooProvider, IST
 
 DOC={'chart':{'result':[{'meta':{'symbol':'DEMO.NS','currency':'INR'},'timestamp':[1792381500], 'indicators':{'quote':[{'open':[100],'high':[101],'low':[99],'close':[100],'volume':[1000]}]}}]}}
 def response(): return io.StringIO(json.dumps(DOC))
 
 class Yahoo(unittest.TestCase):
+    def test_intraday_ignores_nulls_outside_session(self):
+        day=dt.date.today()-dt.timedelta(days=1)
+        starts=[dt.datetime.combine(day,dt.time(8,0),IST),
+                dt.datetime.combine(day,dt.time(9,15),IST),
+                dt.datetime.combine(day,dt.time(9,20),IST)]
+        doc={'chart':{'result':[{'meta':{'symbol':'DEMO.NS','currency':'INR','dataGranularity':'5m'},
+             'timestamp':[int(x.timestamp()) for x in starts],
+             'indicators':{'quote':[{'open':[None,100,101],'high':[None,102,103],
+                'low':[None,99,100],'close':[None,101,102],'volume':[None,1000,1200]}]}}]}}
+        # The completed prior-session candles remain, while the out-of-session
+        # null slot is ignored.
+        self.assertEqual(len(YahooProvider.parse(doc,'DEMO.NS')),2)
+
+    def test_intraday_still_rejects_missing_regular_session_candle(self):
+        day=dt.date.today()-dt.timedelta(days=1)
+        starts=[dt.datetime.combine(day,t,IST) for t in (dt.time(9,15),dt.time(9,20),dt.time(9,25))]
+        doc={'chart':{'result':[{'meta':{'symbol':'DEMO.NS','currency':'INR','dataGranularity':'5m'},
+             'timestamp':[int(x.timestamp()) for x in starts],
+             'indicators':{'quote':[{'open':[100,100,101],'high':[102,None,103],
+                'low':[99,None,100],'close':[101,None,102],'volume':[1000,None,1200]}]}}]}}
+        with self.assertRaisesRegex(ValueError,'missing OHLCV.*high'):
+            YahooProvider.parse(doc,'DEMO.NS')
+
+    def test_captured_tcs_auction_gap_is_outside_strategy_window(self):
+        from india.analysis import report, indicators, backtest
+        from india.data import timestamp
+        doc=json.loads((Path(__file__).parent/'fixtures/india/tcs-yahoo-2026-10-23.json').read_text())
+        bars=YahooProvider.parse(doc,'TCS.NS','5m')
+        r=report(bars,timestamp('2026-10-23T20:30:00+05:30'),'TCS.NS',.05,100000,500)
+        self.assertEqual(r['status'],'NO_SETUP')
+        self.assertFalse(r['execution_enabled'])
+        self.assertIsNone(r['plan'])
+        self.assertFalse(r['market_open'])
+        self.assertTrue(r['stale'])
+        self.assertTrue(r['data_quality']['complete'])
+        self.assertEqual(r['data_quality']['missing_bars'],[])
+        self.assertEqual(r['data_quality']['received_bars'],72)
+        self.assertEqual(r['data_quality']['usable_session_bars'],72)
+        self.assertEqual(r['indicators_as_of'],'2026-10-23T15:15:00+05:30')
+        self.assertEqual(r['indicators'],indicators(bars[:72]))
+        backtest(bars,'TCS.NS',.05,100000,500)
+        # A gap inside continuous trading must still block reports/backtests.
+        broken=bars[:30]+bars[31:]
+        self.assertEqual(report(broken,timestamp('2026-10-23T20:30:00+05:30'),'TCS.NS',.05,100000,500)['status'],'BLOCKED_INCOMPLETE_DATA')
+        with self.assertRaisesRegex(ValueError,'Missing intraday bars'):
+            backtest(broken,'TCS.NS',.05,100000,500)
+
+    def test_captured_tcs_future_gap_does_not_affect_replay(self):
+        from india.analysis import report
+        from india.data import timestamp
+        doc=json.loads((Path(__file__).parent/'fixtures/india/tcs-yahoo-2026-10-23.json').read_text())
+        bars=YahooProvider.parse(doc,'TCS.NS','5m')
+        r=report(bars,timestamp('2026-10-23T10:00:00+05:30'),'TCS.NS',.05,100000,500)
+        self.assertTrue(r['data_quality']['complete'])
+        self.assertFalse(r['stale'])
+        self.assertEqual(r,report(bars[:9],timestamp('2026-10-23T10:00:00+05:30'),'TCS.NS',.05,100000,500))
+
+    def test_captured_tcs_cli_returns_json(self):
+        from india.__main__ import main
+        raw=(Path(__file__).parent/'fixtures/india/tcs-yahoo-2026-10-23.json').read_text()
+        with patch('sys.argv',['india','analyze','TCS.NS','--tick','.05','--as-of','2026-10-23T20:30:00+05:30']),patch('urllib.request.urlopen',side_effect=lambda *a,**k:io.StringIO(raw)),patch('sys.stdout',new_callable=io.StringIO) as out:
+            self.assertEqual(main(),0)
+            self.assertEqual(json.loads(out.getvalue())['status'],'NO_SETUP')
+
+    def test_gap_prefers_complete_alternate_host_without_mixing(self):
+        import copy
+        gap=copy.deepcopy(DOC)
+        result=gap['chart']['result'][0]
+        result['timestamp']=[1792381500,1792381800,1792382100]
+        result['indicators']['quote'][0]={k:[100,None,100] for k in ('open','high','low','close','volume')}
+        intact=copy.deepcopy(gap)
+        intact['chart']['result'][0]['indicators']['quote'][0]={k:[101,101,101] for k in ('open','high','low','close','volume')}
+        with patch('urllib.request.urlopen',side_effect=[io.StringIO(json.dumps(gap)),io.StringIO(json.dumps(intact))]) as call:
+            bars=YahooProvider().history('DEMO.NS','5m')
+        self.assertEqual(call.call_count,2)
+        self.assertEqual([b.close for b in bars],[101,101,101])
+
     def test_retry_then_alternate_host(self):
         err=lambda:urllib.error.HTTPError('https://query2.finance.yahoo.com',429,'limited',{},None)
         with patch('urllib.request.urlopen',side_effect=[err(),err(),response()]) as call,patch('time.sleep'):

@@ -66,15 +66,26 @@ class YahooProvider:
     def history(self, symbol, interval):
         symbol_name(symbol)
         from urllib.parse import quote
-        path = '/v8/finance/chart/%s?range=%s&interval=%s' % (quote(symbol), '1mo' if interval == '1d' else '5d', interval)
+        path = '/v8/finance/chart/%s?range=%s&interval=%s' % (quote(symbol), '1mo' if interval == '1d' else '1d', interval)
         last_error = 'unavailable'
+        partial = None
         for host in ('query2', 'query1'):
             for attempt in range(2):
                 req = urllib.request.Request('https://%s.finance.yahoo.com%s' % (host,path), headers={'User-Agent':'Mozilla/5.0'})
                 try:
                     with urllib.request.urlopen(req, timeout=20) as response:
                         doc = json.load(response)
-                    return self.parse(doc,symbol)
+                    bars = self.parse(doc,symbol,interval)
+                    if interval == '5m' and any(
+                        a.time.date() == b.time.date() and b.time-a.time != dt.timedelta(minutes=5)
+                        for a,b in zip(bars,bars[1:])
+                    ):
+                        # Prefer an intact alternate-host response if available.
+                        # Never combine conflicting snapshots or fill holes.
+                        if partial is None or len(bars) > len(partial):
+                            partial = bars
+                        break
+                    return bars
                 except urllib.error.HTTPError as exc:
                     code = exc.code
                     exc.close()
@@ -89,10 +100,12 @@ class YahooProvider:
                     break
                 if attempt == 0:
                     time.sleep(1)
+        if partial is not None:
+            return partial  # report() labels the gaps and blocks new setups.
         raise ValueError('Yahoo unavailable or incomplete: %s. Supply --csv or retry later; no prices were fabricated.' % last_error)
 
     @staticmethod
-    def parse(doc,symbol):
+    def parse(doc,symbol,interval=None):
         results = doc.get('chart', {}).get('result')
         if not results:
             raise ValueError('Provider returned no chart')
@@ -102,13 +115,32 @@ class YahooProvider:
         q = r['indicators']['quote'][0]
         bars = []
         times = list(r.get('timestamp', []))
-        # Yahoo may append an unpopulated current bar. Exclude only trailing
-        # empty rows; interior gaps still fail and freshness is checked later.
-        while times and any(q[k][len(times)-1] is None for k in ('open','high','low','close','volume')):
-            times.pop()
+        columns = {k: q.get(k) or [] for k in ('open','high','low','close','volume')}
+        now = dt.datetime.now(IST)
+        intraday = interval == '5m' or r.get('meta', {}).get('dataGranularity') in {
+            '1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h'
+        }
         for i, t in enumerate(times):
-            values = [q[k][i] for k in ('open','high','low','close','volume')]
+            when = dt.datetime.fromtimestamp(t, IST)
+            # Yahoo can include pre/post-market samples and a final live tick.
+            # These are not NSE/BSE five-minute candles and must not create
+            # false missing-OHLCV errors or enter the analysis.
+            if intraday and (
+                when.time() < dt.time(9, 15) or when.time() >= dt.time(15, 30)
+                or when.second != 0 or when.minute % 5 != 0
+            ):
+                continue
+            if intraday and when + dt.timedelta(minutes=5) > now:
+                continue  # Yahoo's current candle is still forming.
+            values = [columns[k][i] if i < len(columns[k]) else None
+                      for k in ('open','high','low','close','volume')]
+            # An all-null slot is not a candle. Leave a timestamp gap rather
+            # than inventing prices/volume. Analysis exposes the gap and blocks
+            # setups; backtesting rejects it.
+            if all(v is None for v in values):
+                continue
             if any(v is None for v in values):
-                raise ValueError('Provider contains missing OHLCV; use a complete CSV export')
-            bars.append(Bar(dt.datetime.fromtimestamp(t, IST), *map(float, values)))
+                missing = ', '.join(k for k, v in zip(columns, values) if v is None)
+                raise ValueError('Provider contains missing OHLCV at %s (%s)' % (when.isoformat(), missing))
+            bars.append(Bar(when, *map(float, values)))
         return validate(bars)
