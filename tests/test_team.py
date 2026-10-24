@@ -106,6 +106,22 @@ class Team(unittest.TestCase):
         self.assertTrue(result['preflight']['should_dispatch_specialists'])
         self.assertEqual(finalize(self.directory)['status'],'PENDING_AGENT_REVIEWS')
 
+    def test_positive_reviews_cannot_override_missing_tick_evidence(self):
+        self.prepare(rich=True,security_metadata={});self.reviews()
+        result=finalize(self.directory)
+        self.assertEqual(result['status'],'BLOCKED')
+        self.assertIsNone(result['paper_ticket'])
+        self.assertIn('tick_unverified',result['numerical_risk']['reasons'])
+
+    def test_closed_session_is_diagnosed_before_review_dispatch(self):
+        settings=dict(self.settings,as_of='2026-10-24T00:47:22+05:30')
+        prepare(self.bars,settings,{'source':'SYNTHETIC TEST FIXTURE'},None,self.directory,
+                simulations=8,security_metadata={'DEMO.NS':self.metadata})
+        check=preflight(self.directory)
+        self.assertFalse(check['should_dispatch_specialists'])
+        self.assertIn('OUTSIDE_STRATEGY_WINDOW',{x['code'] for x in check['issues']})
+        self.assertEqual(check['next_potential_signal_cutoff'],'2026-10-26T09:35:00+05:30')
+
     def test_tick_mismatch_and_real_symbol_fixture_cannot_clear(self):
         self.prepare(rich=True,security_metadata={'DEMO.NS':dict(self.metadata,tick_size=.1)})
         self.assertIn('tick_mismatch',evaluate(self.directory,'risk')['data']['reasons'])
@@ -121,6 +137,7 @@ class Team(unittest.TestCase):
         self.assertTrue(_source_check([source],context))
         for changes in (dict(published_date='2026-10-19'),dict(published_date='2026-10-20'),
                         dict(publication_timezone=''),dict(publication_timezone='Unknown'),
+                        dict(accessed_at=None),
                         dict(accessed_at='2026-10-18T12:00:00+05:30'),
                         dict(published_at=self.settings['as_of'])):
             with self.subTest(changes=changes):
@@ -234,6 +251,21 @@ class Team(unittest.TestCase):
                               cwd=self.temp.name,capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertEqual(json.loads(result.stdout)['role'],'risk')
+
+    def test_team_cli_defaults_to_long_nse_history_and_returns_preflight(self):
+        from india.nse import NSEProvider
+        output=io.StringIO()
+        with patch.object(NSEProvider,'__init__',return_value=None) as constructor, \
+                patch.object(NSEProvider,'history',return_value=self.bars), \
+                patch.object(NSEProvider,'provider_symbol','DEMO-EQ',create=True),redirect_stdout(output):
+            code=main(['team','DEMO.NS','--provider','nse','--as-of',self.settings['as_of'],
+                       '--tick','.05','--team-dir',str(self.directory),
+                       '--security-master',str(ROOT/'tests/fixtures/india/workflow/security-master.csv')])
+        self.assertEqual(code,0)
+        constructor.assert_called_once_with(self.now,60)
+        result=json.loads(output.getvalue())
+        self.assertEqual(result['preflight']['tick_verification']['status'],'VERIFIED')
+        self.assertFalse(result['preflight']['should_dispatch_specialists'])
 
     def test_team_record_db_rejected_before_provider_access(self):
         with patch.object(CSVProvider,'history') as fetch,redirect_stderr(io.StringIO()):

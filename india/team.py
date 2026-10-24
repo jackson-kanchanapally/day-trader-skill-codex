@@ -294,6 +294,8 @@ def _publication_upper_bound(source):
     if 'published_at' in source:
         if 'published_date' in source or 'publication_timezone' in source:
             raise ValueError('Use either an exact timestamp or a date and timezone')
+        if not isinstance(source['published_at'],str):
+            raise ValueError('Publication timestamp must be a string')
         return timestamp(source['published_at'])
     day=dt.date.fromisoformat(source['published_date'])
     zone=ZoneInfo(source['publication_timezone'])
@@ -310,6 +312,7 @@ def _source_check(sources, context):
             parsed=urlparse(source.get('url',''))
             host=(parsed.hostname or '').lower()
             if parsed.scheme!='https' or parsed.username or not any(host==d or host.endswith('.'+d) for d in domains): return False
+            if not isinstance(source.get('accessed_at'),str): return False
             upper=_publication_upper_bound(source);accessed=timestamp(source['accessed_at'])
         except (ValueError,TypeError,KeyError,ZoneInfoNotFoundError): return False
         if upper>now or accessed<upper: return False
@@ -344,6 +347,14 @@ def preflight(directory):
         issues.append({'code':'INSUFFICIENT_HISTORY','action':'Request --days 60 with NSE, or supply complete authorized CSV history; keep the 20-session minimum.'})
     if baseline['strategy_open'] and not baseline['stale'] and baseline['status']=='NO_SETUP':
         issues.append({'code':'NO_SETUP','action':'Wait for a completed-bar trigger; a working scan need not find a trade.'})
+    if baseline['status']=='BLOCKED_COST_OR_RISK':
+        issues.append({'code':'COST_OR_RISK_LIMIT','action':'The detected setup fails cost-inclusive sizing; do not force a ticket.'})
+    budget=read_json(directory/ARTIFACTS['budget'])['data']
+    budget_limits=[reason for reason in budget['reasons'] if reason not in ('no_eligible_entry','tick_unverified','tick_mismatch')]
+    if budget_limits:
+        issues.append({'code':'BUDGET_LIMIT','reasons':budget_limits,'action':'Resolve the supplied portfolio or allocation limits before dispatch.'})
+    if complete>=minimum and baseline.get('plan') and tick['status']=='VERIFIED' and machine['status']!='AVAILABLE':
+        issues.append({'code':'FORECAST_UNAVAILABLE','reason':machine['reason'],'action':'Resolve the scenario prerequisites before dispatch.'})
     next_window=None
     exchange='NSE' if s['symbol'].endswith('.NS') else 'BSE'
     for offset in range(15):
@@ -355,6 +366,8 @@ def preflight(directory):
                 next_window=opening.isoformat();break
         except ValueError: break
     same_code=context['code_sha256']==code_hash()
+    if not same_code:
+        issues.append({'code':'ENGINE_CHANGED','action':'This is an archived diagnosis; prepare a new session before evaluation or finalization.'})
     return {'mode':'team_preflight','snapshot_id':context['snapshot_id'],'as_of':s['as_of'],
             'same_engine':same_code,'status':'PREREQUISITES_READY' if not issues and same_code else 'NOT_READY',
             'should_dispatch_specialists':not issues and same_code,

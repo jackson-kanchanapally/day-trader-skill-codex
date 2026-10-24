@@ -16,7 +16,7 @@ Open **http://127.0.0.1:8765**. The server binds only to loopback. Stop it with 
 python3 -m dashboard --sessions trader/team --port 8766
 ```
 
-Run `$trader-team` in Codex while the page is open. “New review” builds a request to copy into Codex; the browser itself does not launch agents. The latest session is followed automatically, or select an archived session and turn off “Follow latest”. Empty workspaces display setup instructions rather than fake data.
+Run `$trader-team` in Codex while the page is open. “New request” builds a request to copy into Codex: choose “Review one stock”, “Discover NSE universe”, or “Scan NSE opportunities”. Universe discovery saves the eligible NSE symbol list; the opportunities request refreshes that list and runs a daily setup scan across it without a symbol limit, reporting coverage and failures. These scanner results are saved by Codex; start a stock review afterward to follow the independent team here. The browser itself does not launch agents. The latest session is followed automatically, or select an archived session and turn off “Follow latest”. Empty workspaces display setup instructions rather than fake data.
 
 Each specialist has an animated person at a desk: sleeping while queued/dispatched, typing after a recorded running event, and holding a report after a validated review is saved. Completed reviews include BLOCK and UNAVAILABLE outcomes; the verdict badge remains separate. Failed or invalid work shows an attention marker. Click a desk (or focus it and press Enter) to open the agent workspace with its report, numerical evidence, sources and raw JSON. Escape closes it. Open workspaces update with the session, and reduced-motion preferences disable animations.
 
