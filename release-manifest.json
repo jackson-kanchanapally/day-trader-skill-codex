@@ -12,13 +12,13 @@
     "dashboard/*.py", "dashboard/README.md", "dashboard/package.json", "dashboard/package-lock.json",
     "dashboard/index.html", "dashboard/vite.config.js", "dashboard/src/*.jsx", "dashboard/src/*.css",
     "docs/GETTING_STARTED.md", "docs/WORKFLOW.md", "docs/TEAM.md",
-    "docs/RESEARCH.md", "docs/OPERATIONS.md", "docs/RELEASE.md",
+    "docs/RESEARCH.md", "docs/OPERATIONS.md", "docs/RELEASE.md", "docs/DASHBOARD_DATA.md",
     "scripts/build_release.py", "tests/_provider_fixtures.py", "tests/fixtures/README.md",
     ".github/workflows/tests.yml", ".github/ISSUE_TEMPLATE/*.yml", ".github/PULL_REQUEST_TEMPLATE.md"
   ],
   "tests": [
-    "tests/test_dashboard.py", "tests/test_forecast.py", "tests/test_hardening.py",
-    "tests/test_india.py", "tests/test_nse.py", "tests/test_repo.py", "tests/test_release.py",
+    "tests/test_dashboard.py", "tests/test_decision_workflow.py", "tests/test_forecast.py", "tests/test_hardening.py",
+    "tests/test_india.py", "tests/test_nse.py", "tests/test_opportunities.py", "tests/test_repo.py", "tests/test_release.py",
     "tests/test_team.py", "tests/test_upstox.py", "tests/test_workflow.py", "tests/test_yahoo.py"
   ],
   "synthetic_fixtures": [

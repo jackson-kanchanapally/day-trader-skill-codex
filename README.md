@@ -123,7 +123,7 @@ python3 -m dashboard
 Open **http://127.0.0.1:8765**. A fresh workspace starts empty. **New request**
 offers copyable prompts for a stock review, NSE universe discovery and a daily
 scan. Run the copied request in Codex; the browser does not start agents.
-Standalone scanner files do not create independent team sessions.
+The Opportunities view lists every daily match by setup strength, with company search, setup filters, pagination and CSV export. Click a company for saved daily charts, indicators, score breakdown and setup evidence. Ranking is an explicit research heuristic, not a probability of profit. Standalone scanner files do not create independent team sessions. Individual research also shows saved coordinator prerequisite assessments, with separate labels and source bindings. Company details distinguish setup strength, current tradeability and risk clearance; review requests require explicit account inputs. The Trading journal reads reconciled paper fills and costs from the existing ledger. See [dashboard data contracts](docs/DASHBOARD_DATA.md).
 
 The animated desks reflect recorded lifecycle events: waiting, working, completed
 review, or attention required. Click a desk to inspect its review, engine evidence

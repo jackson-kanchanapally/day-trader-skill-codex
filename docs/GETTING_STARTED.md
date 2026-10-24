@@ -68,7 +68,10 @@ python3 -m dashboard
 
 Open **http://127.0.0.1:8765**. A fresh workspace starts empty. Choose **New
 request** to copy a stock review, NSE universe or daily scan prompt into Codex.
-Scanner files are written under `trader/`; independent team sessions are observed
+Opportunities lists every saved daily match by setup strength. Click a company
+for its technical evidence, score breakdown and any matching saved daily chart.
+Search/filter the full list or export it as CSV. Scanner files are written under
+`trader/`; independent team sessions are observed
 under `trader/team/`. A standalone scan does not create a team session.
 
 For frontend development, keep the Python server running and start

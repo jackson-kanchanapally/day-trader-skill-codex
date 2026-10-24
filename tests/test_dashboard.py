@@ -96,6 +96,15 @@ class Dashboard(unittest.TestCase):
         with urllib.request.urlopen(base+'/api/sessions') as response:
             self.assertEqual(response.status,200)
             self.assertEqual(response.headers['Cache-Control'],'no-store')
+        with urllib.request.urlopen(base+'/api/research') as response:
+            import json
+            research=json.load(response)
+            self.assertEqual(research['items'][0]['id'],'team:demo')
+            self.assertFalse(research['execution_enabled'])
+        with urllib.request.urlopen(base+'/api/journal') as response:
+            journal=json.load(response)
+            self.assertEqual(journal['status'],'NO_ACCOUNT')
+            self.assertFalse((self.root/'_scanner/state').exists())
         for path,status in (('/api/sessions/..%2foutside',409),('/assets/../../README.md',404),('/.env',404)):
             with self.assertRaises(urllib.error.HTTPError) as e:urllib.request.urlopen(base+path)
             self.assertEqual(e.exception.code,status)

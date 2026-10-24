@@ -1,55 +1,246 @@
 /* Each desk reflects recorded agent lifecycle events. */
-.agent-card { position: relative; padding: 16px 15px; background: #101010; }
-.agent-card:hover { background: #161616; }
-.agent-card.focused { background: #181818; }
-.desk-number { font: 9px ui-monospace, monospace; letter-spacing: 1.2px; color: #969696; }
-.desk-scene { display: block; width: 100%; height: auto; max-height: 177px; margin: 12px auto 2px; overflow: visible; }
-.agent-card h3 { margin-top: 8px; font-size: 13px; }
-.agent-card > p { min-height: 27px; }
-.card-bottom .open-workspace { font-size: 10px; color: #cacaca; }
-.agent-card:focus-visible { outline: 2px solid #f5f5f5; outline-offset: 4px; }
-.desk-working .typing-arms { transform-box: fill-box; transform-origin: center; animation: desk-type .3s steps(2, end) infinite; }
-.desk-working .person-head { transform-origin: 90px 77px; animation: desk-focus 3.5s ease-in-out infinite; }
-.desk-working .screen-cursor { animation: desk-cursor .9s steps(1) infinite; }
-.desk-working .coffee-steam { animation: desk-steam 2.5s ease-in-out infinite; }
-.desk-sleeping .sleep-letters text { animation: desk-sleep 3s ease-in-out infinite; }
-.desk-sleeping .sleep-letters text:nth-child(2) { animation-delay: .5s; }
-.desk-sleeping .sleep-letters text:nth-child(3) { animation-delay: 1s; }
-.desk-report .held-report { transform-origin: 109px 111px; animation: desk-report 5s ease-in-out infinite; }
-.agent-dialog { max-width: 900px; width: calc(100% - 32px); max-height: 88vh; overflow-y: auto; background: #101010; border-color: #444; }
-.agent-dialog .modal-head { border-bottom: 1px solid #303030; padding-bottom: 20px; }
-.workspace-detail { display: grid; grid-template-columns: 225px minmax(0, 1fr); gap: 28px; margin-top: 20px; }
-.workspace-person { display: flex; flex-direction: column; align-items: flex-start; padding: 12px 16px 22px; border: 1px solid #303030; border-radius: 8px; background: #151515; align-self: start; }
-.workspace-person .desk-scene { margin: 2px 0 14px; }
-.workspace-person strong { font-size: 14px; font-weight: 500; }
-.workspace-person p { font-size: 11px; color: #aaa; line-height: 1.8; margin: 11px 0 24px; }
-.workspace-person .eyebrow { font-size: 8px; color: #999; }
-.workspace-person code { color: #ddd; font-size: 10px; overflow-wrap: anywhere; margin: 9px 0 22px; }
-.workspace-person small { font-size: 10px; margin-top: 8px; overflow-wrap: anywhere; }
-.workspace-report { min-width: 0; }
-.workspace-report .tabs { margin-top: 0; }
-.workspace-report h3 { font-size: 12px; font-weight: 500; margin: 25px 0 15px; }
-.workspace-report .evidence-list { max-height: none; }
-.workspace-report .json-view { max-height: 55vh; }
-.workspace-verdict { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 0 18px; }
-.workspace-verdict b { padding: 7px 10px; border-radius: 4px; font-size: 10px; letter-spacing: .8px; }
-.verdict-block { color: #ee9d90; background: #30211e; }
-.verdict-pass { color: #96d4ad; background: #19251e; }
-.verdict-other { color: #e7c58e; background: #30291c; }
-@keyframes desk-type { 50% { transform: translateY(-1.5px) rotate(-1deg); } }
-@keyframes desk-focus { 50% { transform: rotate(3deg); } }
-@keyframes desk-cursor { 50% { opacity: 0; } }
-@keyframes desk-steam { 0%,100% { opacity: .25; transform: translateY(0); } 50% { opacity: .8; transform: translateY(-3px); } }
-@keyframes desk-sleep { 0%,100% { opacity: .25; transform: translateY(2px); } 50% { opacity: .9; transform: translateY(-4px); } }
-@keyframes desk-report { 0%,75%,100% { transform: rotate(0); } 85% { transform: rotate(-3deg); } }
+.agent-card {
+  position: relative;
+  padding: 16px 15px;
+  background: #101010;
+}
+.agent-card:hover {
+  background: #161616;
+}
+.agent-card.focused {
+  background: #181818;
+}
+.desk-number {
+  font:
+    9px ui-monospace,
+    monospace;
+  letter-spacing: 1.2px;
+  color: #969696;
+}
+.desk-scene {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 177px;
+  margin: 12px auto 2px;
+  overflow: visible;
+}
+.agent-card h3 {
+  margin-top: 8px;
+  font-size: 13px;
+}
+.agent-card > p {
+  min-height: 27px;
+}
+.card-bottom .open-workspace {
+  font-size: 10px;
+  color: #cacaca;
+}
+.agent-card:focus-visible {
+  outline: 2px solid #f5f5f5;
+  outline-offset: 4px;
+}
+.desk-working .typing-arms {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: desk-type 0.3s steps(2, end) infinite;
+}
+.desk-working .person-head {
+  transform-origin: 90px 77px;
+  animation: desk-focus 3.5s ease-in-out infinite;
+}
+.desk-working .screen-cursor {
+  animation: desk-cursor 0.9s steps(1) infinite;
+}
+.desk-working .coffee-steam {
+  animation: desk-steam 2.5s ease-in-out infinite;
+}
+.desk-sleeping .sleep-letters text {
+  animation: desk-sleep 3s ease-in-out infinite;
+}
+.desk-sleeping .sleep-letters text:nth-child(2) {
+  animation-delay: 0.5s;
+}
+.desk-sleeping .sleep-letters text:nth-child(3) {
+  animation-delay: 1s;
+}
+.desk-report .held-report {
+  transform-origin: 109px 111px;
+  animation: desk-report 5s ease-in-out infinite;
+}
+.agent-dialog {
+  max-width: 900px;
+  width: calc(100% - 32px);
+  max-height: 88vh;
+  overflow-y: auto;
+  background: #101010;
+  border-color: #444;
+}
+.agent-dialog .modal-head {
+  border-bottom: 1px solid #303030;
+  padding-bottom: 20px;
+}
+.workspace-detail {
+  display: grid;
+  grid-template-columns: 225px minmax(0, 1fr);
+  gap: 28px;
+  margin-top: 20px;
+}
+.workspace-person {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 12px 16px 22px;
+  border: 1px solid #303030;
+  border-radius: 8px;
+  background: #151515;
+  align-self: start;
+}
+.workspace-person .desk-scene {
+  margin: 2px 0 14px;
+}
+.workspace-person strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+.workspace-person p {
+  font-size: 11px;
+  color: #aaa;
+  line-height: 1.8;
+  margin: 11px 0 24px;
+}
+.workspace-person .eyebrow {
+  font-size: 8px;
+  color: #999;
+}
+.workspace-person code {
+  color: #ddd;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+  margin: 9px 0 22px;
+}
+.workspace-person small {
+  font-size: 10px;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+.workspace-report {
+  min-width: 0;
+}
+.workspace-report .tabs {
+  margin-top: 0;
+}
+.workspace-report h3 {
+  font-size: 12px;
+  font-weight: 500;
+  margin: 25px 0 15px;
+}
+.workspace-report .evidence-list {
+  max-height: none;
+}
+.workspace-report .json-view {
+  max-height: 55vh;
+}
+.workspace-verdict {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 24px 0 18px;
+}
+.workspace-verdict b {
+  padding: 7px 10px;
+  border-radius: 4px;
+  font-size: 10px;
+  letter-spacing: 0.8px;
+}
+.verdict-block {
+  color: #ee9d90;
+  background: #30211e;
+}
+.verdict-pass {
+  color: #96d4ad;
+  background: #19251e;
+}
+.verdict-other {
+  color: #e7c58e;
+  background: #30291c;
+}
+@keyframes desk-type {
+  50% {
+    transform: translateY(-1.5px) rotate(-1deg);
+  }
+}
+@keyframes desk-focus {
+  50% {
+    transform: rotate(3deg);
+  }
+}
+@keyframes desk-cursor {
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes desk-steam {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 0.8;
+    transform: translateY(-3px);
+  }
+}
+@keyframes desk-sleep {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(2px);
+  }
+  50% {
+    opacity: 0.9;
+    transform: translateY(-4px);
+  }
+}
+@keyframes desk-report {
+  0%,
+  75%,
+  100% {
+    transform: rotate(0);
+  }
+  85% {
+    transform: rotate(-3deg);
+  }
+}
 @media (max-width: 540px) {
-  .desk-number { font-size: 8px; }
-  .agent-card { padding: 13px 11px; }
-  .agent-card h3 { font-size: 12px; }
-  .card-bottom .open-workspace { font-size: 9px; }
-  .desk-scene { margin-top: 14px; }
-  .workspace-detail { grid-template-columns: 1fr; gap: 20px; }
-  .workspace-person .desk-scene { width: 190px; margin: 0 auto 10px; }
-  .workspace-person p { margin-bottom: 16px; }
-  .workspace-person code { margin-bottom: 16px; }
+  .desk-number {
+    font-size: 8px;
+  }
+  .agent-card {
+    padding: 13px 11px;
+  }
+  .agent-card h3 {
+    font-size: 12px;
+  }
+  .card-bottom .open-workspace {
+    font-size: 9px;
+  }
+  .desk-scene {
+    margin-top: 14px;
+  }
+  .workspace-detail {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  .workspace-person .desk-scene {
+    width: 190px;
+    margin: 0 auto 10px;
+  }
+  .workspace-person p {
+    margin-bottom: 16px;
+  }
+  .workspace-person code {
+    margin-bottom: 16px;
+  }
 }

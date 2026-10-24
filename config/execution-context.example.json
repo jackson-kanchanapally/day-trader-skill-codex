@@ -1,0 +1,19 @@
+{
+  "currency": "INR",
+  "paper": true,
+  "execution_enabled": false,
+  "quotes": [
+    {
+      "symbol": "DEMO.NS",
+      "observed_at": "2026-10-19T09:35:00+05:30",
+      "source": "https://example.invalid/original-synthetic-quote",
+      "bid": 102.25,
+      "ask": 102.3,
+      "lower_price_band": 90,
+      "upper_price_band": 110,
+      "halted": false,
+      "instrument_type": "EQUITY",
+      "fixture": true
+    }
+  ]
+}

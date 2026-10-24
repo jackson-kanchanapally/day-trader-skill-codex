@@ -4,10 +4,13 @@ import datetime as dt
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from india.team import (ARTIFACTS, REQUIRED, VERDICTS, _source_check, load_session,
                         read_json, write_json)
+from .opportunities import OpportunityStore
+from .research import ResearchStore
+from .journal import paper_journal
 
 STATIC=Path(__file__).resolve().parent/'dist'
 ORDER=('scanner','news','analyst','entry','exit','timemachine','budget','risk','broker','alerts')
@@ -126,7 +129,10 @@ def record_activity(directory, role, agent_id, state):
     write_json(path/'activity.json',data)
 
 
-def handler(root):
+def handler(root, workspace=None):
+    workspace=Path(workspace if workspace is not None else Path(root)/'_scanner').resolve()
+    research_store=ResearchStore(workspace,root,sessions,session_view)
+    opportunity_store=OpportunityStore(workspace,research=research_store)
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             # Loopback only, no cross-origin browser access or DNS rebinding.
@@ -134,6 +140,17 @@ def handler(root):
                 self.respond(403,dict(error='Local dashboard only'));return
             url=urlsplit(self.path).path
             try:
+                if url=='/api/opportunities':
+                    self.respond(200,opportunity_store.listing());return
+                if url.startswith('/api/opportunities/'):
+                    query=parse_qs(urlsplit(self.path).query)
+                    self.respond(200,opportunity_store.detail(unquote(url[len('/api/opportunities/'):]),query.get('scan',[None])[0]));return
+                if url=='/api/research':
+                    self.respond(200,research_store.listing());return
+                if url.startswith('/api/research/'):
+                    self.respond(200,research_store.detail(unquote(url[len('/api/research/'):])));return
+                if url=='/api/journal':
+                    self.respond(200,paper_journal(workspace));return
                 if url=='/api/sessions': self.respond(200,dict(sessions=sessions(root)));return
                 if url.startswith('/api/sessions/'):
                     self.respond(200,session_view(root,unquote(url[len('/api/sessions/'):])));return
@@ -143,7 +160,11 @@ def handler(root):
                     self.respond(404,dict(error='Not found. Build the React frontend with npm run build --prefix dashboard.'));return
                 self.respond(200,asset.read_bytes(),mime)
             except (ValueError,OSError,TypeError,KeyError,IndexError):
-                self.respond(409,dict(error='Session is unavailable, incomplete or changed. Retrying on the next refresh.'))
+                message=('Saved scan is unavailable or changed. Refresh the opportunities list.' if url.startswith('/api/opportunities') else
+                         'Saved research is unavailable, changed or fails evidence binding.' if url.startswith('/api/research') else
+                         'Paper ledger is unavailable or failed reconciliation.' if url=='/api/journal' else
+                         'Session is unavailable, incomplete or changed. Retrying on the next refresh.')
+                self.respond(409,dict(error=message))
 
         def respond(self, code, value, mime='application/json'):
             body=json.dumps(value,allow_nan=False).encode() if mime=='application/json' else value
@@ -162,6 +183,7 @@ def handler(root):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--sessions',default='trader/team',help='Directory containing team session folders')
+    parser.add_argument('--workspace',default='trader',help='Scanner workspace containing watchlist.json and optional scan snapshots')
     parser.add_argument('--port',type=int,default=8765)
     sub=parser.add_subparsers(dest='command')
     activity=sub.add_parser('activity',help='Coordinator records actual native lifecycle events; never fabricates progress')
@@ -174,7 +196,7 @@ def main():
         try: record_activity(args.session,args.role,args.agent_id,args.state)
         except (ValueError,OSError,KeyError,TypeError) as exc: parser.exit(1,str(exc)+'\n')
         return
-    server=ThreadingHTTPServer(('127.0.0.1',args.port),handler(Path(args.sessions).resolve()))
+    server=ThreadingHTTPServer(('127.0.0.1',args.port),handler(Path(args.sessions).resolve(),Path(args.workspace).resolve()))
     print('Agent dashboard: http://127.0.0.1:%s' % server.server_port,flush=True)
     print('Watching '+str(Path(args.sessions).resolve()),flush=True)
     try: server.serve_forever()

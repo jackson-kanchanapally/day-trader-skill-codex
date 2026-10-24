@@ -1,0 +1,405 @@
+:root {
+  color-scheme: dark;
+  --app-bg: #0b0d12;
+  --surface: #11151c;
+  --surface-raised: #171c25;
+  --surface-hover: #202733;
+  --line: #2b3340;
+  --muted: #9ba6b5;
+  --lime: #e8edf5;
+  --success: #34d399;
+  --red: #fb7185;
+  --amber: #fbbf24;
+}
+
+html,
+body,
+.shell {
+  background: var(--app-bg);
+}
+
+.sidebar,
+.topbar {
+  background: #0e1117;
+}
+
+.workspace-icon,
+.nav-count {
+  background: #252c37;
+}
+
+.nav-item.selected {
+  color: #f1f5f9;
+  background: #222a36;
+}
+
+.nav-item:hover {
+  background: #1b222c;
+}
+
+.paper-tag {
+  color: #cbd5e1;
+  background: #202733;
+}
+
+.stat,
+.panel {
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.mini-track {
+  background: #29313d;
+}
+
+.mini-track > div {
+  background: #34d399;
+}
+
+.price-line {
+  stroke: #34d399;
+}
+
+.volume-bar {
+  fill: #64748b;
+}
+
+.crosshair {
+  stroke: #94a3b8;
+}
+
+.legend-dot {
+  background: #34d399;
+}
+
+.legend-dot.volume {
+  background: #64748b;
+}
+
+.indicators > div {
+  border-color: var(--line);
+}
+
+.agent-card,
+.activity-panel,
+.evidence-panel {
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.agent-card:hover,
+.agent-card.focused {
+  background: var(--surface-raised);
+  border-color: #475569;
+}
+
+.phase,
+.badge,
+.source-list a,
+.json-view {
+  border-color: #3a4554;
+  background: #1b222c;
+}
+
+.notice {
+  background: #302817;
+  border-color: #66532a;
+  color: #f5d58b;
+}
+
+.notice.error {
+  background: #321d25;
+  border-color: #713849;
+  color: #fecdd3;
+}
+
+dialog {
+  background: #151a22;
+  border-color: #3b4553;
+}
+
+.form-grid input,
+input,
+select,
+.prompt {
+  background-color: #10141b;
+  border-color: #343e4c;
+}
+
+/* The opportunities workspace uses neutral charcoal surfaces. */
+.opportunities {
+  --op-green: #34d399;
+  --op-dim: #9ba6b5;
+  --op-border: #2b3340;
+  color: #e5eaf1;
+}
+
+.op-page-title .eyebrow,
+.op-list-heading .eyebrow,
+.op-scan-context,
+.op-ranking summary,
+.op-table td,
+.op-table th,
+.op-pagination,
+.op-failures summary,
+.op-failures th,
+.op-failures td,
+.op-detail-head p,
+.op-metric-grid span,
+.op-evidence-cards p,
+.op-recent th,
+.op-recent td,
+.op-next-checks li,
+.op-source-card dd {
+  color: #aab4c2;
+}
+
+.op-summary-card,
+.op-ranking,
+.op-search,
+.op-setup-filters button,
+.op-failures,
+.op-detail-dialog,
+.op-detail-head,
+.op-detail-chart,
+.op-metric-grid,
+.op-score-card,
+.op-next-checks,
+.op-source-card {
+  background: #12161e;
+  border-color: #2b3340;
+}
+
+.op-summary-2 {
+  background: #171d26;
+  border-color: #364253;
+}
+
+.op-summary-card > span,
+.op-summary-card p,
+.op-scan-context > span:last-child,
+.op-ranking summary > span:last-child,
+.op-ranking ol,
+.op-list-heading .eyebrow,
+.op-sort,
+.op-opportunity,
+.op-company-button small,
+.op-pagination p,
+.op-failures > p,
+.op-detail-head .eyebrow,
+.op-chart-readout .eyebrow,
+.op-chart-legend,
+.op-metric-grid span,
+.op-score-card > p,
+.op-next-checks > p,
+.op-source-card > p,
+.op-source-card dt,
+.op-provider > span {
+  color: #98a3b3;
+}
+
+.op-secondary,
+.op-sort select,
+.op-pagination select,
+.op-pagination button,
+.op-opportunity,
+.op-table thead,
+.op-table tbody tr:hover,
+.op-table tbody tr:focus-within,
+.op-monogram,
+.op-open-cell button,
+.op-failures th,
+.op-recent th,
+.op-next-checks .primary {
+  background: #1a202a;
+  border-color: #374252;
+}
+
+.op-secondary:hover,
+.op-open-cell button:hover,
+.op-pagination button:hover:not(:disabled) {
+  background: #252e3b;
+  border-color: #536174;
+}
+
+.op-setup-filters button.active {
+  background: #1d302d;
+  border-color: #28765c;
+  color: #a7f3d0;
+}
+
+.op-setup-filters button.active span,
+.op-score-cell > b,
+.op-big-score,
+.op-score-parts b {
+  color: #6ee7b7;
+}
+
+.op-tag-breakout_20d {
+  border-color: #236b54;
+  background: #143027;
+  color: #8ee8c2;
+}
+
+.op-tag-bull_flag {
+  border-color: #315e91;
+  background: #17283b;
+  color: #a8d0ff;
+}
+
+.op-tag-reclaim_ma20 {
+  border-color: #6847a3;
+  background: #261d38;
+  color: #d2b5ff;
+}
+
+.op-tag-oversold_bounce {
+  border-color: #8d6c28;
+  background: #302714;
+  color: #f6d77e;
+}
+
+.op-tag-oversold {
+  border-color: #9a542e;
+  background: #321f17;
+  color: #ffb48a;
+}
+
+.op-score-cell > b {
+  color: #cbd5e1;
+}
+
+.op-small-track,
+.op-score-track {
+  background: #29313d;
+}
+
+.op-small-track > i {
+  background: #34d399;
+}
+
+.op-score-track > i {
+  background: #34d399;
+}
+
+.op-score-parts > div:nth-child(1) .op-score-track > i {
+  background: #818cf8;
+}
+
+.op-score-parts > div:nth-child(2) .op-score-track > i {
+  background: #a78bfa;
+}
+
+.op-score-parts > div:nth-child(3) .op-score-track > i {
+  background: #38bdf8;
+}
+
+.op-score-parts > div:nth-child(4) .op-score-track > i {
+  background: #fbbf24;
+}
+
+.op-score-parts > div:nth-child(5) .op-score-track > i {
+  background: #34d399;
+}
+
+.op-table td,
+.op-table th,
+.op-opportunity,
+.op-metric-grid > div,
+.op-recent td,
+.op-failures td,
+.op-detail-head,
+.op-score-parts,
+.op-score-card > small,
+.op-next-checks li,
+.op-source-card dl > div {
+  border-color: #29313d;
+}
+
+.op-table .op-rank-cell,
+.op-company-button b,
+.op-table .op-price-cell,
+.op-detail-head h2,
+.op-chart-readout strong,
+.op-metric-grid b {
+  color: #e5eaf1;
+}
+
+.op-detail-head .icon-button {
+  background: #1b222c;
+  border-color: #3b4655;
+}
+
+.op-chart,
+.op-detail-chart {
+  color: #cbd5e1;
+}
+
+.op-gridline {
+  stroke: #2b3340;
+}
+
+.op-axis {
+  fill: #9aa6b5;
+}
+
+.op-ma-line {
+  stroke: #fbbf24;
+}
+
+.op-price-line {
+  stroke: #34d399;
+}
+
+.op-high-line {
+  stroke: #60a5fa;
+  opacity: 0.8;
+}
+
+.op-crosshair {
+  stroke: #94a3b8;
+}
+
+.op-chart-legend i {
+  background: #34d399;
+}
+
+.op-chart-legend .op-ma-dot {
+  background: #fbbf24;
+}
+
+.op-chart-empty {
+  color: #aab4c2;
+}
+
+.op-chart-empty > span {
+  color: #34d399;
+}
+
+.op-big-score span,
+.op-score-parts b small {
+  color: #98a3b3;
+}
+
+.op-score-parts > div > div:first-child {
+  color: #b8c1ce;
+}
+
+.op-next-checks .primary {
+  color: #dbeafe;
+}
+
+.op-volume-cell.positive,
+.positive {
+  color: #34d399 !important;
+}
+
+.warning,
+.op-failures summary b,
+.op-stale {
+  color: #fbbf24 !important;
+}
+
+.op-negative {
+  color: #fb7185 !important;
+}
