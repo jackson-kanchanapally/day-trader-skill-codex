@@ -165,8 +165,9 @@ analysis remains conservatively limited to 09:15-15:15 for all equities.
 
 ## Release evidence and remaining acceptance work
 
-GitHub Actions runs the fixture suite on Linux/macOS with Python 3.12 and 3.14,
-and includes a container build/offline smoke job. The workflow uses the published
+GitHub Actions runs the fixture suite on Linux/macOS with Python 3.9, 3.12 and
+3.14, builds the React dashboard, validates the public source export and includes
+a container build/offline smoke job. The workflow uses the published
 [checkout](https://github.com/actions/checkout) and
 [setup-python](https://github.com/actions/setup-python) actions. A local test
 pass does not mean that hosted CI or a container build has run.

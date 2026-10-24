@@ -1,38 +1,101 @@
-# Public release readiness
+# Public source release
 
-Assessment date: 23 October 2026. This document records a scoped local review, not a legal opinion, security certification or approval to publish third-party data.
+The public distribution is an allowlisted source export. It includes the Indian
+runtime, skills, dashboard source, upstream MIT utilities and a synthetic test
+suite. It excludes the development checkout's captured provider payloads,
+capture-dependent historical tests, personal session diagnostics and Git history.
 
-## Completed checks
+The existing development history still contains captured data. Publishing that
+history is a separate decision: generating an export does not remove historical
+blobs, rewrite commits or change repository visibility.
 
-- The original MIT license and Jake Schincariol attribution are retained. Software modifications can be distributed under those terms when the license notices are preserved.
-- A pattern-based scan checked 162 current tracked/unignored release-candidate files for common private-key, AWS access-key, OpenAI-style secret, GitHub token, JWT-shaped token and credential-bearing URL patterns. No credential-pattern matches were found. One filesystem-path-like match was a publisher article URL, not a contributor home directory.
-- A reachable-history scan checked three commits and 169 unique Git blobs for private-key, AWS, OpenAI, GitHub and JWT-shaped patterns, with no matches. The history scan did not cover every candidate pattern, unreachable objects, remote forks, private remotes, arbitrary credential formats or external secret stores.
-- No tracked `trader/`, `var/`, credential-key files, SQLite archives, dashboard dependency trees or generated dashboard builds were found in the reviewed checkout. Runtime reports stay local. New ignore rules add coverage for environment variants, private configuration directories and key formats; ignore rules are not a historical scrub.
-- Public setup examples use the original synthetic demo. The README distinguishes CLI tools, independent Codex agents and the read-only React observer. No saved personal trading reports are advertised as included in a fresh clone.
-- Live execution remains disabled. Native review identities are recorded provenance, not signed attestation. No production-readiness or profitability claim is made.
+## Build a candidate
 
-- Release checks passed: 397 Python tests, the React production build, the offline DEMO analysis (178 shares, execution disabled), installer dry-run, relative documentation links and private/generated-path ignore rules. CI or container deployment was not run as part of this review.
+From the development source root:
 
-## Remaining release issue: provider content and permissions
+```sh
+python3 scripts/build_release.py --check
+python3 scripts/build_release.py --archive
+```
 
-**Do not treat the current data bundle as cleared for unrestricted public redistribution.**
+The default outputs are:
 
-Some tracked fixtures contain captured NSE/Yahoo data, news descriptions, exchange directories and disclosure documents. The original software license and attribution do not establish the redistribution permissions for those materials, even if they came from a public upstream repository. Audit each captured input and applicable provider/content-owner terms.
+- `dist/day-trader-skill-public/`: source files ready for review and a fresh repository.
+- `dist/day-trader-skill-public.tar.gz`: the same tree with fixed archive metadata.
+- `RELEASE.json` inside the tree: the public profile, test modules, synthetic inputs and exclusion categories.
+- `SHA256SUMS` inside the tree: SHA-256 hashes of all selected files and `RELEASE.json`.
 
-NSE's current [terms](https://www.nseindia.com/static/nse-terms-of-use) restrict automated collection and virtual-trading/simulation reuse. Its [copyright policy](https://www.nseindia.com/static/nse-copyright) also distinguishes content permissions from third-party rights. The existing website adapter's successful network response does not establish permission for the intended use. Resolve authorization or distribute/use an appropriate authorized data path rather than promoting the website adapter as an approved free simulation feed.
+The exporter never overwrites an existing directory or archive. For another
+candidate, choose a new destination with `--out dist/candidate-name --archive`.
+It does not copy Git configuration, remotes, history, installed dependencies or
+local runtime artifacts. It copies the current file contents, including reviewed
+working-tree changes, rather than silently exporting an older commit.
 
-If redistribution permission is not established, replace captured content with clearly documented original synthetic fixtures and adapt the corresponding assertions. Preserve regression coverage for parser shape, timestamp conversion, missing data, auction exclusion and causality. Do not simply delete fixtures and leave tests broken, relabel captured data as synthetic, or publish personal runtime snapshots as substitutes.
+`release-manifest.json` declares source globs, test modules and individual
+synthetic fixture paths. Missing patterns, symlink inputs, private/generated
+paths, common credential patterns and broken relative Markdown file links fail
+the build. These are scoped checks, not a complete secret detector or permission
+audit. Review every manifest change and the resulting candidate.
 
-Captured fixtures are already present in reachable commits. Deleting them in a later commit would not remove them from a public push of that history. Use a reviewed, clean release history/export if required after the replacement work; do not rewrite or discard the current repository's history without the owner's explicit authorization.
+## Validate the exported tree
 
-See [NOTICE.md](../NOTICE.md) for attribution and provider references. A disclaimer alone does not grant data permissions.
+Run the commands below **inside the newly exported directory**:
 
-## Owner actions before publishing
+```sh
+python3 -m unittest discover -s tests
+python3 -m india analyze DEMO.NS \
+  --csv tests/fixtures/india/synthetic.csv \
+  --as-of 2026-10-19T09:35:00+05:30 \
+  --tick 0.05 --capital 100000 --risk 500
+python3 install_codex.py --dry-run
+npm ci --prefix dashboard
+npm run build --prefix dashboard
+shasum -a 256 -c SHA256SUMS
+```
 
-1. Resolve the provider/fixture rights issue above and choose the intended release contents/history.
-2. Review `git diff`, `git status --short` and the staged file list. Dashboard source and `package-lock.json` belong in the release; private sessions, archives, credentials, `node_modules` and `dist` do not.
-3. Run the Python tests and React production build from the release candidate. Confirm the offline demo works without network access and that a fresh dashboard starts empty.
-4. Enable repository secret scanning, dependency alerts and private vulnerability reporting where available. These are repository settings; they were not changed by this local work.
-5. Publish the code with the MIT license, third-party notices and experimental/paper-only description. Do not market it as an authorized exchange feed, an investment-advice service, guaranteed lifetime-free infrastructure or a production trading system.
+Use Python 3.9+ and a Node version accepted by `dashboard/package.json`. The demo
+must return 178 fictional shares and `execution_enabled: false`. Tests should
+not need provider credentials or live requests. A sandbox may prevent the
+loopback HTTP test from running; report that skip separately from failures.
 
-No remote was pushed, repository visibility changed, credential rotated, history rewritten or provider authorization obtained during this review.
+Start `python3 -m dashboard` and inspect the empty state, request chooser,
+clipboard prompts and responsive layouts. The browser observes independent team
+sessions; a standalone daily scan does not populate team desks.
+
+CI runs the Python suite, public-export tests and offline demo, dashboard build,
+and container smoke check. Local completion does not claim a remote CI run or
+browser session. `npm ci` and action setup need network access; the numerical
+demo does not.
+
+## Data provenance and preserved coverage
+
+The public profile's input list is documented in
+[fixture provenance](../tests/fixtures/README.md). Original generated payloads
+exercise NSE/Yahoo parsing, exchange-clock conversion, missing/duplicate candles,
+auction exclusion, causal replays and bounded provider failures. Active workflow
+checks cover the reused entry/exit rules, sizing, costs, risk gates, alerts,
+paper accounting, financial/disclosure exports and snapshot integrity.
+
+The extra historical US tests in the development checkout depend on captured
+charts, news or disclosure documents and are intentionally outside this public
+profile. The unchanged MIT utilities they exercise remain included because the
+Indian adapters import selected pure functions from them. A public source
+release does not claim the full historical capture-based regression suite.
+
+Do not add captures to the export merely because they are publicly downloadable,
+present in an upstream repository or labelled `live`/`fixture`. Establish their
+provenance and applicable permissions first. Keep the original license and
+[third-party notices](../NOTICE.md). No provider authorization or legal clearance
+is established by the build process.
+
+## Publish the reviewed source
+
+Review the exported file list, checksums and working changes before creating a
+fresh repository from that tree. Keep the experimental/paper-only description
+and retained attribution. Do not initialize a public repository from the old
+`.git` directory as a shortcut around the export.
+
+Repository hosting settings are owner-controlled: enable suitable secret
+scanning, dependency alerts, private vulnerability reporting and branch checks
+where available. See [SECURITY.md](../SECURITY.md). No push, visibility change,
+credential rotation or Git history rewrite is performed by the release tools.

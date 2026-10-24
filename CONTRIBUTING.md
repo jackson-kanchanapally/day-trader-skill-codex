@@ -12,4 +12,18 @@ For code changes:
 
 The Python runtime remains standard-library-only. The optional dashboard uses React/Vite with a committed lockfile. Avoid unrelated rewrites or new dependencies without a concrete need.
 
+Use Python 3.9+ on macOS or Linux. [Getting started](docs/GETTING_STARTED.md)
+includes the offline demo and dashboard development commands. `make test` runs
+the Python suite; `make dashboard-build` installs locked frontend dependencies
+and builds the UI.
+
+For changes to distributed files, run `python3 scripts/build_release.py --check`.
+Add new source files to the explicit patterns in `release-manifest.json` where
+needed. New fixture inputs require an individual synthetic-provenance entry and
+documentation in [fixture provenance](tests/fixtures/README.md). Validate the
+exported source tree using [the release guide](docs/RELEASE.md); the development
+checkout has extra historical capture-dependent tests that are outside the
+public profile. Release candidates never include your Git history or local
+reports. Do not use an existing candidate directory as scratch space.
+
 Preserve existing license/attribution notices. Contributions should be original or accompanied by the rights and attribution required for distribution under the project's software license. Do not relicense third-party data as project code.

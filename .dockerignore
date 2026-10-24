@@ -15,3 +15,4 @@ venv
 trader
 dashboard/node_modules
 dashboard/dist
+dist

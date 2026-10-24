@@ -2,7 +2,7 @@
 
 Read-only, local dashboard for actual Codex trading-team sessions. React and Vite build the frontend; a Python standard-library HTTP server reads existing handoffs and reviews. No cloud account, AI API key or frontend subscription is required.
 
-From the repository root, using Node 20.19+ or 22.12+ and Python 3.8+:
+From the repository root, using Node 20.19+ or 22.12+ and Python 3.9+:
 
 ```sh
 npm ci --prefix dashboard

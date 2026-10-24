@@ -1,0 +1,35 @@
+name: Bug report
+description: Report a reproducible problem with synthetic or sanitized inputs.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: "For vulnerabilities, follow SECURITY.md. Keep tokens, account identifiers, private reports and captured data out of public issues."
+  - type: input
+    id: revision
+    attributes:
+      label: Commit or release
+      description: Git commit or public source archive name.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, and Node/npm versions for dashboard issues.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Include the exact command and a minimal synthetic input, preferably DEMO.NS.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: Include sanitized error output and explicit timezone-aware cutoffs where relevant.
+    validations:
+      required: true

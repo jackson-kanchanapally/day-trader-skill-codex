@@ -4,9 +4,9 @@ import os
 import unittest
 import urllib.error
 import datetime as dt
-from pathlib import Path
 from unittest.mock import patch
 from india.data import YahooProvider, IST
+from _provider_fixtures import yahoo_intraday
 
 DOC={'chart':{'result':[{'meta':{'symbol':'DEMO.NS','currency':'INR'},'timestamp':[1792381500], 'indicators':{'quote':[{'open':[100],'high':[101],'low':[99],'close':[100],'volume':[1000]}]}}]}}
 def response(): return io.StringIO(json.dumps(DOC))
@@ -35,12 +35,12 @@ class Yahoo(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'missing OHLCV.*high'):
             YahooProvider.parse(doc,'DEMO.NS')
 
-    def test_captured_tcs_auction_gap_is_outside_strategy_window(self):
+    def test_synthetic_auction_gap_is_outside_strategy_window(self):
         from india.analysis import report, indicators, backtest
         from india.data import timestamp
-        doc=json.loads((Path(__file__).parent/'fixtures/india/tcs-yahoo-2026-10-23.json').read_text())
-        bars=YahooProvider.parse(doc,'TCS.NS','5m')
-        r=report(bars,timestamp('2026-10-23T20:30:00+05:30'),'TCS.NS',.05,100000,500)
+        doc=yahoo_intraday()
+        bars=YahooProvider.parse(doc,'DEMO.NS','5m')
+        r=report(bars,timestamp('2026-10-23T20:30:00+05:30'),'DEMO.NS',.05,100000,500)
         self.assertEqual(r['status'],'NO_SETUP')
         self.assertFalse(r['execution_enabled'])
         self.assertIsNone(r['plan'])
@@ -52,27 +52,27 @@ class Yahoo(unittest.TestCase):
         self.assertEqual(r['data_quality']['usable_session_bars'],72)
         self.assertEqual(r['indicators_as_of'],'2026-10-23T15:15:00+05:30')
         self.assertEqual(r['indicators'],indicators(bars[:72]))
-        backtest(bars,'TCS.NS',.05,100000,500)
+        backtest(bars,'DEMO.NS',.05,100000,500)
         # A gap inside continuous trading must still block reports/backtests.
         broken=bars[:30]+bars[31:]
-        self.assertEqual(report(broken,timestamp('2026-10-23T20:30:00+05:30'),'TCS.NS',.05,100000,500)['status'],'BLOCKED_INCOMPLETE_DATA')
+        self.assertEqual(report(broken,timestamp('2026-10-23T20:30:00+05:30'),'DEMO.NS',.05,100000,500)['status'],'BLOCKED_INCOMPLETE_DATA')
         with self.assertRaisesRegex(ValueError,'Missing intraday bars'):
-            backtest(broken,'TCS.NS',.05,100000,500)
+            backtest(broken,'DEMO.NS',.05,100000,500)
 
-    def test_captured_tcs_future_gap_does_not_affect_replay(self):
+    def test_synthetic_future_gap_does_not_affect_replay(self):
         from india.analysis import report
         from india.data import timestamp
-        doc=json.loads((Path(__file__).parent/'fixtures/india/tcs-yahoo-2026-10-23.json').read_text())
-        bars=YahooProvider.parse(doc,'TCS.NS','5m')
-        r=report(bars,timestamp('2026-10-23T10:00:00+05:30'),'TCS.NS',.05,100000,500)
+        doc=yahoo_intraday()
+        bars=YahooProvider.parse(doc,'DEMO.NS','5m')
+        r=report(bars,timestamp('2026-10-23T10:00:00+05:30'),'DEMO.NS',.05,100000,500)
         self.assertTrue(r['data_quality']['complete'])
         self.assertFalse(r['stale'])
-        self.assertEqual(r,report(bars[:9],timestamp('2026-10-23T10:00:00+05:30'),'TCS.NS',.05,100000,500))
+        self.assertEqual(r,report(bars[:9],timestamp('2026-10-23T10:00:00+05:30'),'DEMO.NS',.05,100000,500))
 
-    def test_captured_tcs_cli_returns_json(self):
+    def test_synthetic_cli_returns_json(self):
         from india.__main__ import main
-        raw=(Path(__file__).parent/'fixtures/india/tcs-yahoo-2026-10-23.json').read_text()
-        with patch('sys.argv',['india','analyze','TCS.NS','--tick','.05','--as-of','2026-10-23T20:30:00+05:30']),patch('urllib.request.urlopen',side_effect=lambda *a,**k:io.StringIO(raw)),patch('sys.stdout',new_callable=io.StringIO) as out:
+        raw=json.dumps(yahoo_intraday())
+        with patch('sys.argv',['india','analyze','DEMO.NS','--tick','.05','--as-of','2026-10-23T20:30:00+05:30']),patch('urllib.request.urlopen',side_effect=lambda *a,**k:io.StringIO(raw)),patch('sys.stdout',new_callable=io.StringIO) as out:
             self.assertEqual(main(),0)
             self.assertEqual(json.loads(out.getvalue())['status'],'NO_SETUP')
 

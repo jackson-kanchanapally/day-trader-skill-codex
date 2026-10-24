@@ -20,3 +20,10 @@ var/
 *.sqlite-shm
 dashboard/node_modules/
 dashboard/dist/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.idea/
+.vscode/
