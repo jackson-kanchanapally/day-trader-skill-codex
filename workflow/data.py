@@ -159,7 +159,8 @@ class MarketData:
                     errors.append(str(exc))
                     if isinstance(exc, urllib.error.HTTPError):
                         code = exc.code
-                        exc.close()
+                        if exc.fp is not None:
+                            exc.close()
                         if code == 429 and attempt == 0:
                             time.sleep(1)
                             continue

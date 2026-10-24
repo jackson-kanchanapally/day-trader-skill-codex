@@ -92,7 +92,8 @@ class YahooProvider:
                     return bars
                 except urllib.error.HTTPError as exc:
                     code = exc.code
-                    exc.close()
+                    if exc.fp is not None:
+                        exc.close()
                     last_error = 'HTTP %d' % code
                     if code not in (429,500,502,503,504):
                         raise ValueError('Yahoo request failed: '+last_error) from None

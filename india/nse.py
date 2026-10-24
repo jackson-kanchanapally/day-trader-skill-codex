@@ -44,7 +44,9 @@ class NSEProvider:
                 return doc
             except urllib.error.HTTPError as exc:
                 code = exc.code
-                exc.close()
+                # Python 3.9 leaves the response wrapper uninitialized without fp.
+                if exc.fp is not None:
+                    exc.close()
                 if code not in (429, 500, 502, 503, 504) or attempt:
                     raise ValueError('NSE chart request failed: HTTP %d' % code) from None
             except (urllib.error.URLError, TimeoutError, OSError):

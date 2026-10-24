@@ -22,7 +22,8 @@ def get_json(url, token=None, compressed=False):
             return json.loads(gzip.decompress(data) if compressed else data)
         except urllib.error.HTTPError as exc:
             code=exc.code
-            exc.close()
+            if exc.fp is not None:
+                exc.close()
             if code in (401, 403):
                 raise ValueError('Upstox authentication/access denied; renew your Upstox token and check API access') from None
             if code not in (429, 500, 502, 503, 504) or attempt == 2:

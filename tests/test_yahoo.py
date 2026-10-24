@@ -107,3 +107,45 @@ class Yahoo(unittest.TestCase):
         with patch.dict(os.environ,{},clear=True),patch('sys.argv',['india','history','DEMO.NS','--tick','.05','--as-of','2026-10-23T10:00:00+05:30']),patch('urllib.request.urlopen',side_effect=lambda *a,**k:response()),patch('sys.stdout',new_callable=io.StringIO) as out:
             self.assertEqual(main(),0)
             self.assertIn('Yahoo',json.loads(out.getvalue())['source'])
+
+
+class HTTPErrorCleanup(unittest.TestCase):
+    def providers(self):
+        from india.data import timestamp
+        from india.nse import NSEProvider
+        from india.upstox import get_json
+        from workflow.data import MarketData
+        cutoff = timestamp('2026-10-23T20:30:00+05:30')
+        return [
+            ('nse', lambda: NSEProvider(cutoff).history('DEMO.NS', '5m'), 1),
+            ('upstox', lambda: get_json('https://example.invalid'), 1),
+            ('yahoo', lambda: YahooProvider().history('DEMO.NS', '5m'), 1),
+            ('workflow-yahoo', lambda: MarketData(cutoff, auto_fallback=False).history('DEMO.NS', '1d'), 2),
+        ]
+
+    def test_bodyless_errors_skip_uninitialized_response_cleanup(self):
+        for name, fetch, attempts in self.providers():
+            with self.subTest(provider=name):
+                error = urllib.error.HTTPError('https://example.invalid', 403, 'denied', {}, None)
+                if error.fp is not None:
+                    self.addCleanup(error.close)
+                # Newer Python initializes an empty stream. Reproduce the 3.9
+                # no-body state so this regression stays covered on every version.
+                error.fp = None
+                with patch.object(error, 'close', side_effect=KeyError('file')) as close, \
+                     patch('urllib.request.urlopen', side_effect=error) as request:
+                    with self.assertRaises(ValueError):
+                        fetch()
+                    close.assert_not_called()
+                    self.assertEqual(request.call_count, attempts)
+
+    def test_error_response_bodies_are_still_closed(self):
+        for name, fetch, attempts in self.providers():
+            with self.subTest(provider=name):
+                body = io.BytesIO(b'denied')
+                error = urllib.error.HTTPError('https://example.invalid', 403, 'denied', {}, body)
+                with patch('urllib.request.urlopen', side_effect=error) as request:
+                    with self.assertRaises(ValueError):
+                        fetch()
+                    self.assertEqual(request.call_count, attempts)
+                self.assertTrue(body.closed)
