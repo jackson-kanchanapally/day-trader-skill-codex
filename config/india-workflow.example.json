@@ -18,5 +18,8 @@
   "blocked": [],
   "allow_options": false,
   "allow_margin": false,
-  "allow_short": false
+  "allow_short": false,
+  "entry_buffer_bps": 5,
+  "rvol_lookback": 20,
+  "rvol_min_samples": 5
 }

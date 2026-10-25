@@ -107,7 +107,7 @@ class Workflow(unittest.TestCase):
         doc = budget(self.p, NOW, self.cfg)
         s = doc['sizing']
         self.assertLessEqual(s['max_loss_estimate'], 500)
-        self.assertEqual(s['qty'], 195)
+        self.assertEqual(s['qty'], 188)
         for buy, sell in ((100, 110), (102.3, 99.95)):
             combined = one_way_cost(buy, 100, 'buy', 'NSE')['total']+one_way_cost(sell, 100, 'sell', 'NSE')['total']
             self.assertAlmostEqual(combined, costs(buy, sell, 100)['total'])
@@ -172,13 +172,13 @@ class Workflow(unittest.TestCase):
             proposal = ticket(self.order, self.review(portfolio=ledger.portfolio()), ledger.portfolio(), NOW, self.cfg, self.prices, self.master)
             ledger.approve(proposal, 'yes', NOW)
             fp = proposal['fingerprint']
-            event = ledger.fill(fp, 195, 102.3, NOW, self.cfg, 'test-fill-1')
+            event = ledger.fill(fp, 188, 102.3, NOW, self.cfg, 'test-fill-1', bar=self.bars[4])
             self.assertTrue(event['simulation'])
             pf = ledger.portfolio()
-            self.assertEqual(pf['positions'][0]['shares'], 195)
-            self.assertAlmostEqual(100000-pf['cash'], 195*102.3+event['fees'])
+            self.assertEqual(pf['positions'][0]['shares'], 188)
+            self.assertAlmostEqual(100000-pf['cash'], 188*102.3+event['fees'])
             with self.assertRaises(ValueError):
-                ledger.fill(fp, 195, 102.3, NOW, self.cfg, 'test-fill-1')
+                ledger.fill(fp, 188, 102.3, NOW, self.cfg, 'test-fill-1', bar=self.bars[4])
             self.assertEqual(pf, ledger.portfolio())
             self.assertEqual(self.review(portfolio=pf, state=ledger.state())['block'], 1)
 
@@ -195,7 +195,7 @@ class Workflow(unittest.TestCase):
             ledger.approve(proposal, 'yes', NOW)
             before = ledger.portfolio()
             with self.assertRaises(ValueError):
-                ledger.fill(proposal['fingerprint'], 195, 106, NOW, self.cfg, 'bad-fill')
+                ledger.fill(proposal['fingerprint'], 188, 106, NOW, self.cfg, 'bad-fill', bar=self.bars[4])
             self.assertEqual(before, ledger.portfolio())
 
     def test_sell_fill_cash_and_realized_pnl(self):
@@ -204,17 +204,17 @@ class Workflow(unittest.TestCase):
             self.addCleanup(ledger.close)
             proposal = ticket(self.order, self.review(portfolio=ledger.portfolio()), ledger.portfolio(), NOW, self.cfg, self.prices, self.master)
             ledger.approve(proposal, 'yes', NOW)
-            buy = ledger.fill(proposal['fingerprint'], 195, 102.3, NOW, self.cfg, 'buy-test')
+            buy = ledger.fill(proposal['fingerprint'], 188, 102.3, NOW, self.cfg, 'buy-test', bar=self.bars[4])
             pf = ledger.portfolio()
-            sell_order = dict(symbol='DEMO.NS', side='sell', qty='195', type='market', time_in_force='day', tick=.05)
+            sell_order = dict(symbol='DEMO.NS', side='sell', qty='188', type='market', time_in_force='day', tick=.05)
             sell_review = self.review(orders=[sell_order], portfolio=pf, state=ledger.state())
             sell_ticket = ticket(sell_order, sell_review, pf, NOW, self.cfg, self.prices, self.master, state=ledger.state())
             self.assertTrue(sell_ticket['ready'], sell_ticket)
             ledger.approve(sell_ticket, 'yes', NOW)
-            sell = ledger.fill(sell_ticket['fingerprint'], 195, 103, NOW, self.cfg, 'sell-test')
+            sell = ledger.fill(sell_ticket['fingerprint'], 188, 103, NOW, self.cfg, 'sell-test')
             final = ledger.portfolio()
             self.assertFalse(final['positions'])
-            self.assertAlmostEqual(final['cash']-100000, (103-102.3)*195-buy['fees']-sell['fees'])
+            self.assertAlmostEqual(final['cash']-100000, (103-102.3)*188-buy['fees']-sell['fees'])
             self.assertAlmostEqual(final['realized_pnl'], sell['realized_pnl'])
 
     def test_approved_ticket_and_initial_capital_cannot_be_reused(self):

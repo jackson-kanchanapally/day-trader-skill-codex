@@ -5,20 +5,22 @@
     "README.md", "LICENSE", "NOTICE.md", "CONTRIBUTING.md", "SECURITY.md",
     "CHANGELOG.md", ".gitignore", ".dockerignore", ".env.example", "Makefile",
     "Dockerfile", "install_codex.py", "release-manifest.json",
-    "india/*.py", "workflow/*.py", "trader-*/SKILL.md", "trader-*/*.py",
+    "india/*.py", "workflow/*.py", "research/*.py", "trader-*/SKILL.md", "trader-*/*.py",
     "trader-team/agents/*.yaml", "trader-team/references/*.md",
     "codex-agents/*.toml", "config/*.example.json", "config/calendar.2026.json",
     "legacy/README.md", "legacy/trader-*/*.py", "legacy/trader-*/*.example.json",
     "dashboard/*.py", "dashboard/README.md", "dashboard/package.json", "dashboard/package-lock.json",
     "dashboard/index.html", "dashboard/vite.config.js", "dashboard/src/*.jsx", "dashboard/src/*.css",
     "docs/GETTING_STARTED.md", "docs/WORKFLOW.md", "docs/TEAM.md",
-    "docs/RESEARCH.md", "docs/OPERATIONS.md", "docs/RELEASE.md", "docs/DASHBOARD_DATA.md",
+    "docs/RESEARCH.md", "docs/RESEARCH_LAB.md", "docs/EXPERIMENTS.md", "docs/LIQUIDITY.md", "docs/REGIMES.md", "docs/DATA_SOURCES.md", "docs/OPERATIONS.md", "docs/EXECUTION.md", "docs/RELEASE.md", "docs/DASHBOARD_DATA.md",
     "scripts/build_release.py", "tests/_provider_fixtures.py", "tests/fixtures/README.md",
     ".github/workflows/tests.yml", ".github/ISSUE_TEMPLATE/*.yml", ".github/PULL_REQUEST_TEMPLATE.md"
   ],
   "tests": [
     "tests/test_dashboard.py", "tests/test_decision_workflow.py", "tests/test_forecast.py", "tests/test_hardening.py",
     "tests/test_india.py", "tests/test_nse.py", "tests/test_opportunities.py", "tests/test_repo.py", "tests/test_release.py",
+    "tests/test_research_store.py", "tests/test_research_lab.py", "tests/test_research_strategies.py", "tests/test_research_regimes.py",
+    "tests/test_execution_golden.py", "tests/test_execution_policy.py", "tests/test_volume_calendar.py", "tests/test_liquidity.py",
     "tests/test_team.py", "tests/test_upstox.py", "tests/test_workflow.py", "tests/test_yahoo.py"
   ],
   "synthetic_fixtures": [

@@ -15,8 +15,8 @@ python3 -m india analyze DEMO.NS \
   --tick 0.05 --capital 100000 --risk 500
 ```
 
-Expected: `PAPER_SETUP`, **178 shares**, estimated cost-inclusive stop loss of
-**₹499.83**, and `execution_enabled: false`. These are fictional fixture results.
+Expected: `PAPER_SETUP`, **171 shares**, estimated cost-inclusive stop loss of
+**₹497.29**, and `execution_enabled: false`. These are fictional fixture results.
 A numerical setup is separate from independent-team clearance.
 
 [Getting started](docs/GETTING_STARTED.md) · [Workflow commands](docs/WORKFLOW.md) ·
@@ -123,7 +123,7 @@ python3 -m dashboard
 Open **http://127.0.0.1:8765**. A fresh workspace starts empty. **New request**
 offers copyable prompts for a stock review, NSE universe discovery and a daily
 scan. Run the copied request in Codex; the browser does not start agents.
-The Opportunities view lists every daily match by setup strength, with company search, setup filters, pagination and CSV export. Click a company for saved daily charts, indicators, score breakdown and setup evidence. Ranking is an explicit research heuristic, not a probability of profit. Standalone scanner files do not create independent team sessions. Individual research also shows saved coordinator prerequisite assessments, with separate labels and source bindings. Company details distinguish setup strength, current tradeability and risk clearance; review requests require explicit account inputs. The Trading journal reads reconciled paper fills and costs from the existing ledger. See [dashboard data contracts](docs/DASHBOARD_DATA.md).
+The Opportunities view lists every daily match by setup strength, with company search, setup filters, pagination and CSV export. Click a company for saved daily charts, indicators, score breakdown and setup evidence. Ranking is an explicit research heuristic, not a probability of profit. Standalone scanner files do not create independent team sessions. Individual research also shows saved coordinator prerequisite assessments, with separate labels and source bindings. Company details distinguish setup strength, current tradeability and risk clearance; stock research starts with a symbol, and account inputs appear when planning a paper trade. The Trading journal reads reconciled paper fills and costs from the existing ledger. See [dashboard data contracts](docs/DASHBOARD_DATA.md).
 
 The animated desks reflect recorded lifecycle events: waiting, working, completed
 review, or attention required. Click a desk to inspect its review, engine evidence
@@ -200,8 +200,9 @@ whole shares. It has no broker transport, notification delivery, automatic broke
 reconciliation or implicit background monitoring.
 
 Ticks require dated instrument-specific verification. Built-in calendar coverage
-is 2026; BSE shares the bundled calendar, and special sessions are unsupported.
-Uncovered years fail closed. Costs are estimates. Short samples, liquidity,
+is 2026; BSE shares the bundled calendar. Sourced exceptional windows are
+recognized by calendar checks; the full-day ORB strategy rejects evening and
+shortened sessions. Expiring coverage warns; uncovered years fail closed. Costs are estimates. Short samples, liquidity,
 corporate actions, selection bias and regime changes limit historical conclusions.
 A strategy match or simulated stop cannot guarantee an executable trade or a
 maximum realized loss.
@@ -233,3 +234,16 @@ retain their respective rights; see [NOTICE.md](NOTICE.md).
 
 This is an independent adaptation, not an official OpenAI, NSE, BSE, Yahoo or
 Upstox product.
+
+Execution policy, regression baseline, RVOL semantics and calendar boundaries are documented in [execution correctness](docs/EXECUTION.md).
+
+The [research laboratory](docs/RESEARCH_LAB.md) provides versioned local candle
+imports and frozen-vintage walk-forward evaluation of the existing ORB strategy.
+
+[Declared ORB experiments](docs/EXPERIMENTS.md) compare 5/15/30-minute ranges and
+VWAP/EMA/RVOL/ATR filters against the unchanged baseline. The production
+research data choice is [licensed NSE/BSE exports](docs/DATA_SOURCES.md).
+Optional [spread and liquidity scenarios](docs/LIQUIDITY.md) add explicit costs,
+causal volume screening and unresolved-exit diagnostics to these experiments.
+[Sourced regime attribution](docs/REGIMES.md) freezes dated NSE/BSE context at
+session open and reports coverage and conditional performance without changing signals.

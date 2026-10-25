@@ -1,6 +1,7 @@
 """Serve the local dashboard; the browser cannot spawn agents or submit orders."""
 import argparse
 import datetime as dt
+import errno
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -196,7 +197,15 @@ def main():
         try: record_activity(args.session,args.role,args.agent_id,args.state)
         except (ValueError,OSError,KeyError,TypeError) as exc: parser.exit(1,str(exc)+'\n')
         return
-    server=ThreadingHTTPServer(('127.0.0.1',args.port),handler(Path(args.sessions).resolve(),Path(args.workspace).resolve()))
+    try:
+        server=ThreadingHTTPServer(('127.0.0.1',args.port),handler(Path(args.sessions).resolve(),Path(args.workspace).resolve()))
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            alternate = args.port+1 if args.port < 65535 else 8765
+            parser.exit(1, 'Port %s is already in use.\n'
+                        'If the dashboard is already running, open http://127.0.0.1:%s\n'
+                        'For another copy, run: python3 -m dashboard --port %s\n' % (args.port,args.port,alternate))
+        raise
     print('Agent dashboard: http://127.0.0.1:%s' % server.server_port,flush=True)
     print('Watching '+str(Path(args.sessions).resolve()),flush=True)
     try: server.serve_forever()

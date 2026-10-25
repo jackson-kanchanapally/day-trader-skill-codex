@@ -1,5 +1,8 @@
 """Read-only observability, real progress and snapshot gates; no AI/network data."""
 import datetime as dt
+import errno
+import io
+from contextlib import redirect_stderr
 import tempfile
 import threading
 import unittest
@@ -9,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 from http.server import ThreadingHTTPServer
 
-from dashboard.__main__ import sessions, session_view, record_activity, handler
+from dashboard.__main__ import sessions, session_view, record_activity, handler, main
 from india.team import prepare, read_json, write_json, evaluate
 from india.analysis import report
 from india.data import CSVProvider, timestamp
@@ -19,6 +22,16 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 class Dashboard(unittest.TestCase):
+    def test_busy_port_prints_existing_url_and_alternate_command(self):
+        error=io.StringIO()
+        with patch('sys.argv',['dashboard']), patch('dashboard.__main__.ThreadingHTTPServer',side_effect=OSError(errno.EADDRINUSE,'Address already in use')), redirect_stderr(error):
+            with self.assertRaises(SystemExit) as exc:
+                main()
+        self.assertEqual(exc.exception.code,1)
+        self.assertIn('http://127.0.0.1:8765',error.getvalue())
+        self.assertIn('python3 -m dashboard --port 8766',error.getvalue())
+        self.assertNotIn('Traceback',error.getvalue())
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name);self.session=self.root/'demo'

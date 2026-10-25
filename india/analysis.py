@@ -2,10 +2,11 @@
 import datetime as dt
 import importlib.util
 import math
-from decimal import Decimal, ROUND_FLOOR, ROUND_CEILING
 from pathlib import Path
 from .data import IST, validate
-from .market import session, costs
+from .market import session, DEFAULT_CALENDAR
+from .execution import tick_price, size_position, replay_trade
+from .volume import volume_profile
 
 # A strategy window, deliberately conservative for all equities. Since August
 # 2026 eligible stocks enter NSE's closing auction at 15:15; auction updates
@@ -30,22 +31,28 @@ def completed(bars, as_of, minutes, calendar=None, exchange='NSE'):
         raise ValueError('No completed regular-session bars as of requested time')
     return bars
 
-def indicators(bars):
+def session_vwap(bars):
+    """HLC3/volume candle approximation for the latest session, not tick VWAP."""
     if not bars:
-        return dict.fromkeys(('rsi14','ema9','ema21','vwap','volume_spike'))
-    closes = [b.close for b in bars]
+        return None
     today = [b for b in bars if b.time.date() == bars[-1].time.date()]
     volume = sum(b.volume for b in today)
-    prior = bars[-21:-1]
-    mean = sum(b.volume for b in prior)/len(prior) if prior else 0
+    return sum((b.high+b.low+b.close)/3*b.volume for b in today)/volume if volume else None
+
+
+def indicators(bars, *, minutes=5, lookback=20, min_samples=5, calendar=None, exchange='NSE'):
+    if not bars:
+        return dict.fromkeys(('rsi14','ema9','ema21','vwap','volume_spike','relative_volume'))
+    closes = [b.close for b in bars]
+    profile = volume_profile(bars, minutes=minutes, lookback=lookback, min_samples=min_samples,
+                             calendar=calendar, exchange=exchange)
     return {'rsi14': _scan.rsi(closes) if len(closes) >= 15 else None,
             'ema9': ema(closes,9), 'ema21': ema(closes,21),
-            'vwap': sum((b.high+b.low+b.close)/3*b.volume for b in today)/volume if volume else None,
-            'volume_spike': bars[-1].volume/mean if mean else None}
+            'vwap': session_vwap(bars),
+            'volume_spike': profile['same_time']['value'], 'relative_volume': profile}
 
 def tick_round(x, tick, up=False):
-    t = Decimal(str(tick))
-    return float((Decimal(str(x))/t).to_integral_value(rounding=ROUND_CEILING if up else ROUND_FLOOR)*t)
+    return tick_price(x, tick, up)
 
 def proposal(bars, tick, rr):
     day = bars[-1].time.date()
@@ -56,32 +63,21 @@ def proposal(bars, tick, rr):
     high, low = max(b.high for b in opening), min(b.low for b in opening)
     last = today[-1]
     earlier = [b for b in today if dt.time(9,30) <= b.time.time() and b is not last]
-    if last.time.time() < dt.time(9,30) or last.close <= high or any(b.close > high for b in earlier):
+    if last.volume <= 0 or last.time.time() < dt.time(9,30) or last.close <= high or any(b.close > high for b in earlier):
         return None
     entry, stop = tick_round(last.close,tick,True), tick_round(low,tick)
     if entry <= stop:
         return None
-    return {'entry': entry, 'stop': stop, 'target': tick_round(entry+rr*(entry-stop),tick,True), 'signal_time': last.time.isoformat()}
+    return {'entry': entry, 'stop': stop, 'target': tick_round(entry+rr*(entry-stop),tick,True), 'signal_time': last.time.isoformat(), 'tick': tick, 'interval': '5m', 'flat_by': '15:10'}
 
 def size(plan, capital, risk, exchange, config):
-    e,s,t = (plan[k] for k in ('entry','stop','target'))
-    lo, hi = 0, int(min(capital/e, risk/(e-s)))
-    while lo < hi:
-        q = (lo+hi+1)//2
-        fee = costs(e,s,q,exchange,config)['total']
-        if q*(e-s)+fee <= risk and q*e+fee <= capital:
-            lo = q
-        else:
-            hi = q-1
-    loss = lo*(e-s)+costs(e,s,lo,exchange,config)['total']
-    reward = lo*(t-e)-costs(e,t,lo,exchange,config)['total']
-    return dict(plan, qty=lo, max_loss_estimate=loss, net_reward=reward,
-                net_reward_risk=reward/loss if loss else 0, costs_at_target=costs(e,t,lo,exchange,config))
+    return size_position(plan, capital, risk, exchange, config)
 
 def report(bars, as_of, symbol, tick, capital, risk, rr=2., config=None, calendar=None):
     if not all(math.isfinite(x) and x > 0 for x in (tick,capital,risk,rr)):
         raise ValueError('tick, capital, risk and reward/risk must be positive finite numbers')
     exchange = 'NSE' if symbol.endswith('.NS') else 'BSE'
+    (calendar or DEFAULT_CALENDAR).require_strategy_session(as_of.astimezone(IST).date(), exchange)
     bars = completed([b for b in bars if b.time.astimezone(IST).time() < ANALYSIS_END],as_of,5,calendar,exchange)
     today = [b for b in bars if b.time.date() == bars[-1].time.date()]
     if any(b.time.second or b.time.microsecond or b.time.minute % 5 for b in today):
@@ -97,6 +93,8 @@ def report(bars, as_of, symbol, tick, capital, risk, rr=2., config=None, calenda
     usable = [b for b in today if b.time < missing[0]] if missing else bars
     stale = not usable or (as_of-usable[-1].time-dt.timedelta(minutes=5)).total_seconds() > 600
     eligible = not missing and session(as_of,calendar,exchange) and not stale and as_of.astimezone(IST).time() < ANALYSIS_END
+    # Leave a full executable bar before the shared 15:10 flatten boundary.
+    eligible = eligible and as_of.astimezone(IST).time() <= dt.time(15, 5)
     plan = proposal(bars,tick,rr) if eligible else None
     sized = size(plan,capital,risk,'NSE' if symbol.endswith('.NS') else 'BSE',config) if plan else None
     if missing:
@@ -107,47 +105,42 @@ def report(bars, as_of, symbol, tick, capital, risk, rr=2., config=None, calenda
         status = 'PAPER_SETUP' if sized else 'NO_SETUP'
     return {'symbol':symbol,'mode':'paper','execution_enabled':False,'as_of':as_of.isoformat(),
             'last_bar':bars[-1].time.isoformat(),'stale':stale,'status':status,
-            'indicators':indicators(usable),'plan':sized,
+            'indicators':indicators(usable, calendar=calendar, exchange=exchange),'plan':sized,
             'indicators_as_of':(usable[-1].time+dt.timedelta(minutes=5)).isoformat() if usable else None,
             'data_quality':{'complete':not missing,'expected_bars':len(expected),
                             'received_bars':len(today),'usable_session_bars':sum(b.time.date()==today[0].time.date() for b in usable),
                             'missing_bars':[t.isoformat() for t in missing]},
+            'calendar_warnings':(calendar or DEFAULT_CALENDAR).coverage_warnings(as_of.astimezone(IST).date(), exchange),
             'market_open':session(as_of,calendar,exchange),
             'analysis_window':{'start':'09:15','end':'15:15','timezone':'Asia/Kolkata'},
             'strategy_open':session(as_of,calendar,exchange) and as_of.astimezone(IST).time() < ANALYSIS_END}
 
 def backtest(bars, symbol, tick, capital, risk, rr=2., config=None, calendar=None):
-    bars = [b for b in bars if b.time.astimezone(IST).time() < ANALYSIS_END]
+    """Fixed range-low ORB adapter over the shared conservative fill engine."""
     validate(bars)
-    if not all(math.isfinite(x) and x > 0 for x in (tick,capital,risk,rr)):
+    bars = [b for b in bars if b.time.astimezone(IST).time() < ANALYSIS_END]
+    if not all(math.isfinite(x) and x > 0 for x in (tick, capital, risk, rr)):
         raise ValueError('Invalid backtest parameters')
-    for a,b in zip(bars,bars[1:]):
-        if a.time.date() == b.time.date() and b.time-a.time != dt.timedelta(minutes=5):
-            raise ValueError('Missing intraday bars in backtest')
-    trades=[]
     exchange = 'NSE' if symbol.endswith('.NS') else 'BSE'
-    for i in range(3,len(bars)-1):
-        b,nxt=bars[i],bars[i+1]
-        if not session(b.time,calendar,exchange) or b.time.time() >= dt.time(15,10): continue
-        p=proposal(bars[:i+1],tick,rr)
-        if not p or nxt.time-b.time != dt.timedelta(minutes=5): continue
-        p['entry']=tick_round(nxt.open,tick,True)  # fill only at next bar open
-        if p['entry'] <= p['stop'] or p['entry'] >= p['target']: continue
-        p=size(p,capital,risk,'NSE' if symbol.endswith('.NS') else 'BSE',config)
-        if not p['qty'] or p['net_reward_risk'] < 1: continue
-        future=[x for x in bars[i+1:] if x.time.date()==b.time.date() and session(x.time,calendar,exchange)]
-        exit_price=None
-        exit_bar=None
-        for x in future:
-            exit_bar=x
-            if x.low <= p['stop']:
-                exit_price=min(x.open,p['stop']); break
-            if x.high >= p['target']:
-                exit_price=p['target']; break
-            if x.time.time() >= dt.time(15,10):
-                exit_price=x.close; break
-        if exit_price is None: continue  # incomplete session, never invent a close
-        fee=costs(p['entry'],exit_price,p['qty'],'NSE' if symbol.endswith('.NS') else 'BSE',config)['total']
-        trades.append(dict(p,entry_time=nxt.time.isoformat(),exit_bar=exit_bar.time.isoformat(),
-                           exit=exit_price,net_pnl=(exit_price-p['entry'])*p['qty']-fee))
-    return {'mode':'paper','trades':trades,'net_pnl':sum(t['net_pnl'] for t in trades)}
+    cal = calendar or DEFAULT_CALENDAR
+    grouped = {}
+    for bar in bars:
+        if session(bar.time, cal, exchange):
+            cal.require_strategy_session(bar.time.date(), exchange)
+            start = bar.time.replace(hour=9, minute=15, second=0, microsecond=0)
+            if (bar.time-start).total_seconds() % 300:
+                raise ValueError('Off-grid five-minute candle')
+            grouped.setdefault(bar.time.date(), []).append(bar)
+    trades = []
+    for day, rows in sorted(grouped.items()):
+        start = dt.datetime.combine(day, dt.time(9, 15), IST)
+        if rows[0].time != start or any(b.time-a.time != dt.timedelta(minutes=5) for a, b in zip(rows, rows[1:])):
+            raise ValueError('Missing intraday bars in backtest')
+        for index in range(3, len(rows)-1):
+            p = proposal(rows[:index+1], tick, rr)
+            if p:
+                trade = replay_trade(p, rows[index+1:], capital, risk, exchange, config)
+                if trade:
+                    trades.append(trade)
+                break
+    return {'mode': 'paper', 'trades': trades, 'net_pnl': sum(t['net_pnl'] for t in trades)}

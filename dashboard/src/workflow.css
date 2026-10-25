@@ -365,6 +365,45 @@
   margin: 12px 0 0;
   font-size: 10px;
 }
+
+/* Keep the first research step small; show trade and date controls on request. */
+.request-dialog.request-simple { max-width: 560px; padding: 26px; border-radius: 16px; }
+.request-simple .modal-head h2 { font-size: 25px; margin-top: 9px; }
+.request-simple > p { font-size: 11px; margin: 14px 0 18px; }
+.request-stock-label { display: flex; flex-direction: column; gap: 9px; font-size: 11px; color: #c2ccda; }
+.request-stock-label input { width: 100%; padding: 13px 12px; font-size: 14px; }
+.request-context { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 10px 0 18px; font-size: 10px; color: #8fa2b9; line-height: 1.8; }
+.request-context b { font-weight: 500; color: #a6c7ed; }
+.request-purpose { display: flex; gap: 4px; padding: 4px; background: #0e131b; border: 1px solid #2c3746; border-radius: 10px; }
+.request-purpose button { flex: 1; padding: 10px 6px; border: 1px solid transparent; border-radius: 7px; background: transparent; font-size: 11px; color: #99a9be; }
+.request-purpose button.active { color: #dceaff; background: #233246; border-color: #3a516e; box-shadow: 0 2px 7px #0003; }
+.request-simple .request-help { font-size: 10px; line-height: 1.8; color: #93a6be; margin: 11px 0 16px; }
+.request-options { margin-top: 15px; padding-top: 13px; border-top: 1px solid #2c3644; }
+.request-options summary { display: flex; justify-content: space-between; align-items: center; gap: 12px; cursor: pointer; font-size: 11px; color: #b0c3dd; }
+.request-options summary small { font-size: 9px; color: #7e91aa; }
+.request-options[open] summary { margin-bottom: 16px; }
+.request-simple .request-preview { margin-top: 8px; }
+.request-simple > .primary { margin-top: 14px; padding: 13px; border-radius: 8px; font-size: 12px; }
+.request-simple .request-options .request-check { font-size: 10px; }
+
+/* Mini desks retain the same lifecycle illustrations and full workspace links. */
+.agent-grid { gap: 10px; }
+.agent-card { display: flex; flex-direction: column; padding: 12px; border-radius: 13px; }
+.agent-card .desk-number { font-size: 8px; letter-spacing: .8px; }
+.agent-card .phase { background: transparent; font-size: 8px; }
+.agent-mini-body { display: flex; align-items: center; gap: 9px; min-height: 77px; margin: 9px 0 5px; }
+.agent-card .desk-scene { flex: none; width: 74px; height: 67px; max-height: 67px; margin: 0; border-radius: 12px; background: #18202a; }
+.agent-mini-copy { min-width: 0; }
+.agent-mini-copy h3 { font-size: 12px; line-height: 1.4; font-weight: 550; margin: 0 0 5px; }
+.agent-mini-copy p { font-size: 9px; color: #96a5b9; line-height: 1.5; margin: 0; }
+.agent-card .card-bottom { margin-top: auto; padding-top: 9px; border-color: #293442; }
+.agent-card .card-bottom .badge { font-size: 8px; letter-spacing: .4px; padding: 4px 6px; border-radius: 5px; }
+.agent-card .card-bottom .open-workspace { font-size: 9px; color: #9fb4ce; }
+.team-legend { margin: 13px 0 22px; }
+.team-legend summary { cursor: pointer; color: #899db7; font-size: 10px; }
+.team-legend .network-note { max-width: 1000px; margin-top: 9px; line-height: 1.9; }
+@media (min-width: 1650px) { .agent-card { padding: 13px; } }
+@media (max-width: 700px) { .request-dialog.request-simple { padding: 21px; } .agent-card { padding: 10px; } .agent-mini-body { gap: 7px; min-height: 77px; } .agent-card .desk-scene { width: 52px; height: 54px; } .agent-mini-copy h3 { font-size: 11px; } .agent-mini-copy p { font-size: 8px; line-height: 1.6; } }
 .research-layout {
   display: grid;
   grid-template-columns: 285px minmax(0, 1fr);

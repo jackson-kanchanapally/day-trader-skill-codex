@@ -1,0 +1,14 @@
+[
+  {
+    "exchange": "NSE",
+    "model": "synthetic-regime-v1",
+    "benchmark": "ORIGINAL_SYNTHETIC_INDEX",
+    "method": "Invented demonstration label only; replace with a documented causal classification rule and version",
+    "label": "TREND_UP",
+    "effective_from": "2026-09-01",
+    "effective_to": "2026-09-01",
+    "data_through": "2026-08-31T15:30:00+05:30",
+    "published_at": "2026-09-01T08:00:00+05:30",
+    "source": "Original synthetic example; not NSE/BSE evidence or a production classification"
+  }
+]

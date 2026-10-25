@@ -20,7 +20,7 @@ class India(unittest.TestCase):
         self.assertEqual(backtest(self.bars[:4],'DEMO.NS',.05,100000,500)['trades'],[])
         trades=backtest(self.bars,'DEMO.NS',.05,100000,500)['trades']
         self.assertEqual(len(trades),1)
-        self.assertGreaterEqual(trades[0]['entry'],self.bars[4].open)
+        self.assertAlmostEqual(trades[0]['entry'],self.bars[4].open)  # normalized provider float noise
     def test_missing_and_stale(self):
         gap=report(self.bars[:2]+self.bars[3:],self.now,'DEMO.NS',.05,100000,500)
         self.assertEqual(gap['status'],'BLOCKED_INCOMPLETE_DATA')

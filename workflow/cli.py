@@ -28,7 +28,7 @@ def parser(role):
         'timemachine': market | set('--from --replays --seed'.split()),
         'budget': {'--from'},
         'risk': market | {'--from', '--security-master', '--exchange', '--tick'},
-        'broker': market | set('--security-master --exchange --tick --symbol --from --index --reply --qty --price --fingerprint --fill-id'.split()),
+        'broker': market | set('--security-master --exchange --tick --symbol --from --index --reply --qty --price --fingerprint --fill-id --fill-bar'.split()),
         'alerts': market | selection | set('--exchange --from --from-plan --opening-bell --above --below --stop --target --pct --direction --at --label --id --rearm --date'.split()),
         'news': market | selection | set('--hours --all --feed-url --announcements --no-moves --prices-csv'.split()),
         'analyst': {'--filing', '--metrics'},
@@ -102,6 +102,7 @@ def parser(role):
     add('--price', type=float)
     add('--fingerprint')
     add('--fill-id')
+    add('--fill-bar', help='Observed OHLCV JSON with time, open, high, low, close, volume for a paper entry')
     add('--from-plan', action='store_true')
     add('--opening-bell', action='store_true')
     add('--above', type=float)
@@ -318,7 +319,10 @@ def run(role, a):
             if role == 'broker' and command == 'fill':
                 if not a.fingerprint or a.qty is None or a.price is None or not a.fill_id:
                     raise ValueError('Fill needs --fingerprint, --qty, --price and --fill-id')
-                event = ledger.fill(a.fingerprint, a.qty, a.price, now, cfg, a.fill_id)
+                from india.data import Bar, timestamp
+                observed = read(a.fill_bar) if a.fill_bar else None
+                bar = Bar(timestamp(observed['time']), *(observed[k] for k in ('open', 'high', 'low', 'close', 'volume'))) if observed else None
+                event = ledger.fill(a.fingerprint, a.qty, a.price, now, cfg, a.fill_id, bar=bar)
                 write(w/'portfolio.json', ledger.portfolio())
                 write(w/'state/broker.json', ledger.state())
                 return event, 0

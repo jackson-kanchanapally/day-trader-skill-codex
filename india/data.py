@@ -41,12 +41,14 @@ def validate(bars):
     previous = None
     for b in bars:
         vals = [b.open, b.high, b.low, b.close, b.volume]
-        if not all(math.isfinite(v) for v in vals) or min(vals[:4]) <= 0 or b.volume < 0:
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in vals) or min(vals[:4]) <= 0 or b.volume < 0:
             raise ValueError('Invalid or missing OHLCV values')
         if b.low > min(b.open, b.close) or b.high < max(b.open, b.close) or b.low > b.high:
             raise ValueError('Invalid OHLC range')
-        if b.time.tzinfo is None or (previous is not None and b.time <= previous):
+        if b.time.tzinfo is None or b.time.utcoffset() is None or (previous is not None and b.time <= previous):
             raise ValueError('Bars must have unique increasing aware timestamps')
+        if b.time.utcoffset() != IST.utcoffset(None):
+            raise ValueError('Candle timestamps must be normalized to IST at the provider boundary')
         previous = b.time
     return bars
 

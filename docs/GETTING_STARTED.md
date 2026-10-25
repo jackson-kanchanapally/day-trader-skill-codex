@@ -14,7 +14,7 @@ python3 -m india analyze DEMO.NS \
   --tick 0.05 --capital 100000 --risk 500
 ```
 
-The fictional example returns `PAPER_SETUP`, 178 shares and
+The fictional example returns `PAPER_SETUP`, 171 shares and
 `execution_enabled: false`. It needs no credentials, network access or Codex
 session. The data and tick are synthetic. `make demo` runs the same command.
 

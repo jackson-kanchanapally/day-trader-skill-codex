@@ -1,0 +1,9 @@
+[
+  {"name": "orb-5", "or_minutes": 5},
+  {"name": "orb-30", "or_minutes": 30},
+  {"name": "vwap-15", "require_vwap": true},
+  {"name": "ema-15", "ema_fast": 9, "ema_slow": 21},
+  {"name": "rvol-15", "min_rvol": 1.5, "rvol_mode": "same_time", "rvol_lookback": 20, "rvol_min_samples": 5},
+  {"name": "atr-filter-15", "min_atr_pct": 0.1, "max_atr_pct": 2},
+  {"name": "atr-stop-15", "stop": "atr:1.5"}
+]

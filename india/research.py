@@ -29,30 +29,29 @@ def metrics(trades, capital):
             'equity_curve':curve}
 
 
-def evaluate(days, symbol, tick, capital, risk, rr, config, calendar, risk_fraction):
+def evaluate(days, symbol, tick, capital, risk, rr, config, calendar, risk_fraction, *, day_metadata=None, backtester=None):
     equity, trades = capital, []
-    for _, bars in days:
+    for day, bars in days:
         if equity <= 0:
             break
         # Size from realized equity only. No future outcome enters sizing.
         budget = min(risk,equity*risk_fraction)
-        result = backtest(bars,symbol,tick,equity,budget,rr,config,calendar)
+        metadata = (day_metadata or {}).get(day, {})
+        replay = backtester or backtest
+        result = replay(bars,symbol,metadata.get('tick', tick),equity,budget,rr,config,calendar)
         for trade in result['trades']:
+            if day_metadata is not None:
+                trade = dict(trade, symbol=symbol, sector=metadata.get('sector', 'UNKNOWN'),
+                             regime=metadata.get('regime', 'UNKNOWN'))
             trades.append(trade)
             equity += trade['net_pnl']
     return dict(metrics(trades,capital),trade_details=trades)
 
 
-def research(bars, as_of, symbol, tick, capital, risk, rr=2., config=None,
-             calendar=None, train_fraction=.7, risk_fraction=.005):
-    if not (0 < train_fraction < 1 and 0 < risk_fraction <= 1):
-        raise ValueError('train_fraction must be between 0 and 1; risk_fraction must be in (0,1]')
-    if not all(math.isfinite(x) and x > 0 for x in (tick,capital,risk,rr)):
-        raise ValueError('Research parameters must be positive finite numbers')
-    costs(1,1,0,'NSE' if symbol.endswith('.NS') else 'BSE',config)
+def complete_sessions(bars, as_of, calendar=None, exchange='NSE', *, expected_dates=None):
+    """Reject partial windows and missing scheduled/explicitly eligible dates."""
     validate(bars)
     grouped = {}
-    exchange = 'NSE' if symbol.endswith('.NS') else 'BSE'
     for b in bars:
         when=b.time.astimezone(IST)
         if (when+dt.timedelta(minutes=5) <= as_of
@@ -68,16 +67,30 @@ def research(bars, as_of, symbol, tick, capital, risk, rr=2., config=None,
             days.append((day,rows))
     if excluded:
         raise ValueError('Research requires complete 72-bar sessions; incomplete dates: '+', '.join(excluded))
-    if len(days) < 2:
-        raise ValueError('Research requires at least two complete trading sessions for chronological holdout')
     missing = []
-    day=days[0][0]
-    while day <= days[-1][0]:
-        if trading_day(day,calendar,exchange) and day not in grouped:
+    day=days[0][0] if days else None
+    while day is not None and day <= days[-1][0]:
+        if expected_dates is None and trading_day(day,calendar,exchange) and day not in grouped:
             missing.append(day.isoformat())
         day += dt.timedelta(days=1)
+    if expected_dates is not None:
+        missing = sorted(set(expected_dates)-set(grouped))
+        missing = [d.isoformat() for d in missing]
     if missing:
         raise ValueError('Research contains missing whole trading sessions: '+', '.join(missing))
+    return days
+
+
+def research(bars, as_of, symbol, tick, capital, risk, rr=2., config=None,
+             calendar=None, train_fraction=.7, risk_fraction=.005):
+    if not (0 < train_fraction < 1 and 0 < risk_fraction <= 1):
+        raise ValueError('train_fraction must be between 0 and 1; risk_fraction must be in (0,1]')
+    if not all(math.isfinite(x) and x > 0 for x in (tick,capital,risk,rr)):
+        raise ValueError('Research parameters must be positive finite numbers')
+    costs(1,1,0,'NSE' if symbol.endswith('.NS') else 'BSE',config)
+    days = complete_sessions(bars, as_of, calendar, 'NSE' if symbol.endswith('.NS') else 'BSE')
+    if len(days) < 2:
+        raise ValueError('Research requires at least two complete trading sessions for chronological holdout')
     split = min(len(days)-1,max(1,int(len(days)*train_fraction)))
     baseline = (config or {}).get('slippage_bps',5.)
     # Even a zero-slippage baseline gets a meaningful positive stress case.

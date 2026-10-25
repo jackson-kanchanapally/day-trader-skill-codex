@@ -7,17 +7,18 @@ import json
 import math
 import re
 import sqlite3
-import uuid
 
-from india.analysis import size
+from india.execution import entry_fill, estimate_entry, size_position, validate_fill
 from india.market import DEFAULT_CALENDAR, costs
-from .common import clock, digest, envelope, exchange_of, indian_words, number, upstream, utc
+from .common import config as checked_config, clock, digest, envelope, exchange_of, indian_words, number, upstream, utc
 from .data import verify_tick
 
 
 def one_way_cost(price, qty, side, exchange, config=None):
     c = costs(price, price, qty, exchange, config)
     parts = {k: c[k]/2 for k in ('brokerage', 'exchange', 'sebi', 'slippage')}
+    if 'spread' in c:
+        parts['spread'] = c['spread']/2
     parts['stt'] = c['stt'] if side == 'sell' else 0
     parts['stamp'] = c['stamp'] if side == 'buy' else 0
     parts['gst'] = c['gst']/2
@@ -29,12 +30,13 @@ def order_hash(order):
 
 
 def budget(p, now, cfg):
+    checked_config(**cfg)
     capital = number(cfg.get('budget'), 'budget')
     risk = number(cfg['max_loss_per_trade_inr'], 'max_loss_per_trade_inr')
     # Cash buffer and concentration/order limits constrain the cash available
     # to the same cost-aware binary-search sizing used by the Indian engine.
     available = min(capital*(1-cfg['cash_buffer_pct']/100), capital*cfg['max_position_pct']/100, cfg['max_order_inr'])
-    result = size(p, available, risk, exchange_of(p['symbol']), cfg.get('costs'))
+    result = size_position(p, available, risk, exchange_of(p['symbol']), cfg.get('costs'), cfg.get('entry_buffer_bps', 5.))
     if not result['qty'] or result['net_reward_risk'] < cfg['min_reward_risk']:
         return envelope('budget', now, status='BLOCKED', reason='COST_OR_RISK_LIMIT', orders=[], sizing=result)
     if result['qty']*p['entry'] < cfg['min_order_inr']:
@@ -71,6 +73,7 @@ def validate_portfolio(pf):
 
 
 def risk(orders, now, cfg, portfolio, prices_doc, state=None, master=None, calendar=None):
+    checked_config(**cfg)
     if not isinstance(orders, list) or not orders:
         raise ValueError('No proposed orders to check')
     validate_portfolio(portfolio)
@@ -80,6 +83,7 @@ def risk(orders, now, cfg, portfolio, prices_doc, state=None, master=None, calen
     if len(exchanges) != 1:
         raise ValueError('Check NSE and BSE batches separately against their exchange calendars')
     exchange = exchanges.pop()
+    cal.require_strategy_session(now.date(), exchange)
     m = upstream('risk', cal, exchange)
     m.TICKER = re.compile(r'^[A-Z0-9&.\-]+\.(NS|BO)$')
     m.fingerprint = order_hash
@@ -131,6 +135,14 @@ def risk(orders, now, cfg, portfolio, prices_doc, state=None, master=None, calen
                     extra.append(field+' does not align with tick')
         if q == int(q) and q > 0 and review['entry_ref']:
             e = review['entry_ref']
+            if side == 'buy' and p.get('entry'):
+                reference = dict(p, entry=max(float(e), float(p['entry'])))
+                e = estimate_entry(reference, cfg.get('entry_buffer_bps', 5.))
+                if order.get('type') == 'limit':
+                    e = float(order['limit_price'])
+                review['estimated_entry'] = e
+                if q*e > cfg['max_order_inr'] or q*e > cfg['budget']*cfg['max_position_pct']/100:
+                    extra.append('Estimated fill breaches order or position cap')
             fee = one_way_cost(e, int(q), side, exchange, cfg.get('costs'))['total']
             if side == 'buy' and review.get('stop') and review.get('target'):
                 stop, target = review['stop'], review['target']
@@ -240,7 +252,8 @@ class Ledger:
             raise ValueError('This exact paper ticket already has a recorded decision') from None
         return event
 
-    def fill(self, fp, qty, price, now, cfg, event_id):
+    def fill(self, fp, qty, price, now, cfg, event_id, *, bar=None):
+        checked_config(**cfg)
         q, price = number(qty, 'qty'), number(price, 'price')
         if q != int(q) or not event_id:
             raise ValueError('Fill needs whole shares and an idempotency ID')
@@ -272,11 +285,17 @@ class Ledger:
                 limit = float(order['limit_price'])
                 if (side == 'buy' and price > limit) or (side == 'sell' and price < limit):
                     raise ValueError('Simulated fill violates the approved limit price')
+            fill_doc = {}
             if side == 'buy':
-                step = 1 if order['plan'].get('interval') == '1m' else 5
-                confirmation = clock(order['plan']['signal_time'])+dt.timedelta(minutes=step)
-                if not 0 <= (now-confirmation).total_seconds() <= step*60:
-                    raise ValueError('Entry signal expired before simulated fill')
+                if bar is None:
+                    raise ValueError('Paper entry requires an observed fill candle; supply --fill-bar JSON')
+                fill_doc = entry_fill(order['plan'], bar, clock(approval['at']))
+                if bar.time > now:
+                    raise ValueError('Fill candle open is in the future')
+                if abs(price-fill_doc['entry']) > 1e-8:
+                    raise ValueError('Supplied price differs from canonical candle-open fill')
+                if order.get('type') == 'limit' and price > float(order['limit_price']):
+                    raise ValueError('Candle open exceeds approved limit; intrabar limit fills unsupported')
             fee = one_way_cost(price, q, side, exchange_of(sym), cfg.get('costs'))['total']
             held = next((p for p in pf['positions'] if p['ticker'] == sym), None)
             pnl = 0
@@ -284,7 +303,15 @@ class Ledger:
                 p = order['plan']
                 if not p['stop'] < price < p['target']:
                     raise ValueError('Simulated entry must lie between approved stop and target')
-                loss = (price-p['stop'])*q+costs(price, p['stop'], q, exchange_of(sym), cfg.get('costs'))['total']
+                available = min(pf['cash']-cfg['budget']*cfg['cash_buffer_pct']/100,
+                                cfg['max_order_inr'], cfg['budget']*cfg['max_position_pct']/100-price*(held['shares'] if held else 0))
+                values = validate_fill(p, price, q, available, cfg['max_loss_per_trade_inr'],
+                                       exchange_of(sym), cfg.get('costs'), cfg['min_reward_risk'])
+                loss = values['max_loss_estimate']
+                prior_loss = sum(float(e.get('max_loss') or 0) for e in self.events()
+                                 if e.get('status') == 'placed' and e.get('kind') == 'entry' and e.get('date') == now.date().isoformat())
+                if prior_loss+loss > cfg['max_daily_loss_inr']:
+                    raise ValueError('Actual fill breaches daily cost-inclusive risk budget')
                 reward = (p['target']-price)*q-costs(price, p['target'], q, exchange_of(sym), cfg.get('costs'))['total']
                 if loss > cfg['max_loss_per_trade_inr'] or reward/loss < cfg['min_reward_risk']:
                     raise ValueError('Fill price would breach approved cost/risk limits')
@@ -324,7 +351,8 @@ class Ledger:
             event = dict(id=event_id, status='placed', simulation=True, paper=True, execution_enabled=False,
                          fingerprint=fp, symbol=sym, side=side, qty=q, price=price, fees=fee,
                          at=now.isoformat(), date=now.date().isoformat(), kind='entry' if side == 'buy' else 'exit',
-                         max_loss=approval.get('max_loss'), realized_pnl=pnl)
+                         max_loss=loss if side == 'buy' else approval.get('max_loss'), realized_pnl=pnl,
+                         **fill_doc)
             self.db.execute('UPDATE state SET document=? WHERE id=1', (json.dumps(pf),))
             self.db.execute('INSERT INTO events VALUES (?, ?)', (event_id, json.dumps(event)))
             self.db.execute('INSERT INTO events VALUES (?, ?)', ('filled:'+fp, json.dumps(dict(status='filled', fingerprint=fp))))

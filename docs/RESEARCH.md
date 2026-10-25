@@ -40,10 +40,13 @@ Each slippage scenario reports:
 - Full paper trade records, including entry time and exit candle timestamp.
 
 The exit timestamp identifies the candle containing an exit; it does not claim
-an exact intrabar execution time. The 15:10 candle's close represents 15:15
-liquidation. An unresolved position is omitted by the base backtester; complete
+an exact intrabar execution time. The 15:05 candle's close represents the
+shared 15:10 flatten boundary. An unresolved position is omitted by the base backtester; complete
 sessions ensure that a regular strategy close is available. Stop/target
-ambiguity remains conservative: stop first when both are touched in one candle.
+ambiguity remains conservative: after processing known opening gaps, stop first
+when both levels are touched within one candle. Quantity is sized from a
+conservative pre-fill estimate and revalidated at the actual next open; an
+adverse gap cannot trigger hindsight resizing. See [execution policy](EXECUTION.md).
 
 Default slippage scenarios are 5, 10 and 20 basis points per side. Cost overrides
 change the baseline. Every scenario sizes independently including its own
@@ -61,3 +64,7 @@ Every `--record-db` run preserves data, settings, calendar, source and a code
 fingerprint. Replay through `python3 -m india replay RUN_ID --db PATH` to verify
 the same computation without requesting revised data from the provider. See
 [operations](OPERATIONS.md) for backups, health monitoring and deployment.
+
+The [offline research laboratory](RESEARCH_LAB.md) adds versioned local history,
+dated universe/action evidence and walk-forward reports around this same engine.
+The existing `python3 -m india research` interface remains available.

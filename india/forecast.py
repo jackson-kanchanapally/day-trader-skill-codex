@@ -210,7 +210,7 @@ def forecast(bars, as_of, plan, symbol, tick, capital, risk, rr=2., config=None,
     if [b.time for b in today] != [opening + STEP * i for i in range(first_slot)]:
         return unavailable('INCOMPLETE_CURRENT_SESSION')
     scenario_start = opening + STEP * first_slot
-    doc['plan'] = size({k: plan[k] for k in ('entry', 'stop', 'target', 'signal_time')},
+    doc['plan'] = size(dict({k: plan[k] for k in ('entry', 'stop', 'target', 'signal_time')}, tick=tick),
                        capital, risk, exchange, config)
     if not doc['plan']['qty'] or doc['plan']['net_reward_risk'] < 1:
         return unavailable('COST_OR_RISK_LIMIT')

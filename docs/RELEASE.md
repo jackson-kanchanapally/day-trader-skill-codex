@@ -54,7 +54,7 @@ shasum -a 256 -c SHA256SUMS
 ```
 
 Use Python 3.9+ and a Node version accepted by `dashboard/package.json`. The demo
-must return 178 fictional shares and `execution_enabled: false`. Tests should
+must return 171 fictional shares and `execution_enabled: false`. Tests should
 not need provider credentials or live requests. A sandbox may prevent the
 loopback HTTP test from running; report that skip separately from failures.
 

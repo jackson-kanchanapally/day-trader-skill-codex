@@ -87,11 +87,16 @@ Records at different cutoffs remain separately labelled; they cannot silently
 replace the selected scan's findings.
 
 `GET /api/research/ID` returns the record. Opportunity details link all saved
-research for that exact symbol. The review form carries symbol and source cutoff,
-requires explicit capital, loss limits, exposure and account state, and can request
-an explicit closed-market diagnostic. Copying its text runs nothing in the browser.
-It asks Codex to obtain remaining account constraints, cost assumptions and dated
-metadata before sizing; example engine defaults are never inserted as user choices.
+research for that exact symbol. Research-only requests need a stock symbol and
+preserve a selected source cutoff automatically. Date options are optional and
+use an IST date/time picker. They continue available company research while
+leaving sizing and order clearance pending.
+
+Choosing **Plan a paper trade** asks for explicit capital and per-trade loss;
+other account limits and positions are optional form details. Codex obtains
+missing constraints, costs and dated metadata before any actual sizing. The
+advanced trade settings also allow an explicit closed-market diagnostic. Copying
+the text runs nothing in the browser, and no engine defaults become user choices.
 
 ## Paper journal
 

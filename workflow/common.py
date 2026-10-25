@@ -20,7 +20,8 @@ DEFAULTS = dict(cash_buffer_pct=10, max_position_pct=75, max_order_inr=100000,
                 max_trades_per_day=3, max_orders_per_day=10, min_reward_risk=1,
                 no_entries_before='09:30', no_entries_after='15:00', flat_by='15:10',
                 paper=True, fractional=False, blocked=[], broker='local-paper',
-                allow_options=False, allow_margin=False, allow_short=False)
+                allow_options=False, allow_margin=False, allow_short=False, entry_buffer_bps=5.,
+                rvol_lookback=20, rvol_min_samples=5)
 
 
 def read(path, default=None):
@@ -84,8 +85,14 @@ def config(path=None, **overrides):
     if c.get('paper') is not True or c.get('broker') != 'local-paper':
         raise ValueError('Only local-paper is supported; live/broker order execution is disabled')
     for key in ('fractional', 'allow_options', 'allow_margin', 'allow_short', 'pdt_guard'):
-        if c.get(key):
-            raise ValueError(key+' is unsupported for cash-equity paper workflows')
+        if c.get(key, False) is not False:
+            raise ValueError(key+' is unsupported; set '+key+' to false for cash-equity paper workflows')
+    number(c['entry_buffer_bps'], 'entry_buffer_bps', zero=True)
+    for key in ('rvol_lookback', 'rvol_min_samples'):
+        if isinstance(c[key], bool) or not isinstance(c[key], int) or c[key] < 1:
+            raise ValueError(key+' must be a positive integer')
+    if c['rvol_min_samples'] > c['rvol_lookback']:
+        raise ValueError('rvol_min_samples cannot exceed rvol_lookback')
     if any(k.endswith('_usd') for k in c):
         raise ValueError('Use *_inr configuration keys; USD settings are not silently converted')
     for key in ('budget', 'max_order_inr', 'max_loss_per_trade_inr', 'max_daily_loss_inr', 'min_reward_risk'):

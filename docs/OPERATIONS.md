@@ -159,9 +159,15 @@ the exchange before adding a year. Loading a calendar does not certify its
 contents. BSE's bundled dates retain the original shared NSE-calendar assumption;
 independently verify BSE exceptions before operating a BSE workflow.
 
-Special sessions and different opening/closing times are unsupported; do not
-remove a holiday to pretend that a special session is a normal one. Strategy
-analysis remains conservatively limited to 09:15-15:15 for all equities.
+Optional `valid_until` limits year coverage; warnings appear within 30 days of
+the boundary and expired coverage fails closed. A year may also contain
+`sessions`, mapping an exceptional date to `open`, `close`, `source` and optional
+`kind` (such as `muhurat`). Clocks are local IST HH:MM. A sourced explicit window
+overrides a weekend or holiday for that date. No exceptional dates are bundled
+or inferred. Do not remove holidays to represent special sessions. Calendar
+clock checks recognize those windows; ORB strategies fail explicitly if the
+window does not cover their 09:15-15:15 assumptions. See
+[execution correctness](EXECUTION.md) for the supported boundary.
 
 ## Release evidence and remaining acceptance work
 

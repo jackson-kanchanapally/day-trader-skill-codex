@@ -2,16 +2,19 @@
 import datetime as dt
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
 
-from india.analysis import indicators, size
+from india.analysis import indicators
+from india.execution import replay_trade, tick_price
+from india.volume import relative_volume
 from india.data import IST, validate
 from india.forecast import _simulate, MIN_SESSIONS, MAX_SIMS
-from india.market import DEFAULT_CALENDAR, costs
+from india.market import DEFAULT_CALENDAR
 from .common import clock, envelope, exchange_of, indian_words, number, upstream, utc
 from .data import verify_tick
 
 
 def regular(bars, now, interval, calendar, exchange):
     minutes = 1 if interval == '1m' else 5
+    calendar.require_strategy_session(now.date(), exchange)
     completed = [b for b in bars if b.time+dt.timedelta(minutes=minutes) <= now]
     if completed:
         validate(completed)
@@ -41,18 +44,45 @@ def entry(bars, symbol, now, cfg, setup='orb', level=None, interval='5m', or_min
     rows, missing = regular(bars, now, interval, cal, exchange)
     m = upstream('entry', cal, exchange)
     chart = {'symbol': symbol, 'bars': [dict(t=int(b.time.timestamp()), o=b.open, h=b.high, l=b.low, c=b.close, v=b.volume) for b in rows], 'data_time': None, 'prev_close': None}
-    result = m.evaluate(chart, utc(now), setup=setup, level=level, interval=interval,
-                        or_minutes=or_minutes, min_volume_x=min_volume_x, cfg=cfg)
+    completed_history = [b for b in bars if b.time+dt.timedelta(minutes=1 if interval == '1m' else 5) <= now]
+    volume_args = dict(minutes=1 if interval == '1m' else 5,
+                       lookback=cfg.get('rvol_lookback', 20), min_samples=cfg.get('rvol_min_samples', 5),
+                       calendar=cal, exchange=exchange)
+    excluded_volume = []
+    evaluation_cfg = dict(cfg)
+    while True:
+        result = m.evaluate(chart, utc(now), setup=setup, level=level, interval=interval,
+                            or_minutes=or_minutes, min_volume_x=None, cfg=evaluation_cfg)
+        trig = result.get('trigger')
+        if not trig:
+            break
+        cutoff = dt.datetime.combine(now.date(), dt.time.fromisoformat(trig['close_time']), IST)
+        rvol = relative_volume(completed_history, as_of=cutoff, **volume_args)
+        trig['volume_x'] = rvol['value']
+        trig['relative_volume'] = rvol
+        if min_volume_x is None or (rvol['value'] is not None and rvol['value'] >= min_volume_x):
+            break
+        excluded_volume.append(dict(signal_time=cutoff.isoformat(), relative_volume=rvol))
+        # Search subsequent confirmations without changing any market data.
+        evaluation_cfg['no_entries_before'] = (cutoff+dt.timedelta(minutes=1)).strftime('%H:%M')
+    result['min_volume_x'] = min_volume_x
+    result['no_entries_before'] = cfg['no_entries_before']
+    if excluded_volume and not result.get('trigger'):
+        result['reason'] = 'No breakout met prior-session time-of-day RVOL requirements'
+
+    indicator_rows = [b for b in rows if b.time < clock(missing[0])] if missing else completed_history
     doc = dict(m.public(result), **{k: v for k, v in m.entry_doc(result, utc(now)).items() if k not in m.public(result)})
     doc.update(source=source, currency='INR', timezone='Asia/Kolkata', paper=True,
                execution_enabled=False, checked_at=now.isoformat(), as_of=now.isoformat(),
-               missing_bars=missing, data_complete=not missing, indicators=indicators(rows),
-               strategy_window='09:15-15:15 IST')
+               missing_bars=missing, data_complete=not missing,
+               volume_rejections=excluded_volume, indicators=indicators(indicator_rows, **volume_args),
+               strategy_window='09:15-15:15 IST', calendar_warnings=cal.coverage_warnings(now.date(), exchange))
     if missing:
         doc.update(status='no-data', reason='Missing required session candles', trigger=None,
                    price=None, time=None, bar_index=None)
     trigger = doc.get('trigger')
     eligible = bool(trigger and doc['status'] == 'triggered' and doc.get('minutes_since', 0) <= (1 if interval == '1m' else 5)
+                    and trigger.get('volume', 0) > 0
                     and dt.time.fromisoformat(cfg['no_entries_before']) <= now.time() <= dt.time.fromisoformat(cfg['no_entries_after']))
     doc['eligible'] = eligible
     if trigger:
@@ -60,6 +90,9 @@ def entry(bars, symbol, now, cfg, setup='orb', level=None, interval='5m', or_min
                    bar_index=trigger['bar_index'], bar_start=trigger['bar_start'])
         signal = dt.datetime.combine(now.date(), dt.time.fromisoformat(trigger['bar_start']), IST)
         doc['signal_time'] = signal.isoformat()
+        confirmation = signal+dt.timedelta(minutes=1 if interval == '1m' else 5)
+        doc['signal_confirmed_at'] = confirmation.isoformat()
+        doc['eligible'] = doc['eligible'] and dt.timedelta(0) <= now-confirmation <= dt.timedelta(minutes=1 if interval == '1m' else 5)
     if tick is not None:
         doc['tick'] = tick
         doc['tick_verification'] = verify_tick(symbol, tick, master or {})
@@ -104,6 +137,8 @@ def scan(data, symbols, now, cfg, mode='orb', calendar=None, min_price=0, min_vo
 
 
 def rounded(value, tick, direction=ROUND_HALF_UP):
+    if direction in (ROUND_CEILING, ROUND_FLOOR):
+        return tick_price(value,tick,direction == ROUND_CEILING)
     return float((Decimal(str(value))/Decimal(str(tick))).to_integral_value(rounding=direction)*Decimal(str(tick)))
 
 
@@ -147,7 +182,10 @@ def plan(info, now, tick, cfg, stop=None, target='2R', bars=None, calendar=None,
                          opening_range.get('high'), opening_range.get('low'), atr, atr_n)
     flat = flat_by or cfg['flat_by']
     at = dt.time.fromisoformat(flat)
-    confirmation = signal+dt.timedelta(minutes=1 if info.get('interval') == '1m' else 5) if signal else None
+    minutes = 1 if info.get('interval') == '1m' else 5
+    if at.second or at.microsecond or (at.hour*60+at.minute-9*60-15) % minutes:
+        raise ValueError('Flat-by must align with the candle interval')
+    confirmation = signal+dt.timedelta(minutes=minutes) if signal else None
     if not dt.time(9, 15) < at < dt.time(15, 15) or (confirmation and confirmation.time() >= at):
         raise ValueError('Flat-by must follow entry and precede 15:15 IST')
     target_price = rounded(float(computed['target']), tick, ROUND_CEILING)
@@ -156,7 +194,7 @@ def plan(info, now, tick, cfg, stop=None, target='2R', bars=None, calendar=None,
                     entry=e, entry_time=confirmation.strftime('%H:%M') if confirmation else None,
                     signal_time=signal.isoformat() if signal else None,
                     entry_bar=info.get('bar_index'), interval=info.get('interval', '5m'),
-                    opening_range=opening_range or None, level=info.get('level'), stop=float(computed['stop']),
+                    opening_range=opening_range or None, level=info.get('level'), min_volume_x=info.get('min_volume_x'), stop=float(computed['stop']),
                     stop_rule=stop_rule, stop_spec=stop, stop_label=computed['stop_label'],
                     target=target_price, target_spec=target, target_r=(target_price-e)/risk_per_share,
                     risk_per_share=risk_per_share, reward_risk=(target_price-e)/risk_per_share,
@@ -167,44 +205,32 @@ def plan(info, now, tick, cfg, stop=None, target='2R', bars=None, calendar=None,
 
 
 def historical_replay(days, current_plan, cfg, calendar=None):
-    """Replay the actual configured rule with causal next-open fills and costs."""
+    """Configured-rule adapter; signals stay separate from canonical fills."""
     trades = []
     symbol, tick = current_plan['symbol'], current_plan['tick']
+    if current_plan.get('interval', '5m') != '5m':
+        raise ValueError('Historical strategy replay requires five-minute candles')
+    available = min(cfg['budget']*(1-cfg['cash_buffer_pct']/100),
+                    cfg['budget']*cfg['max_position_pct']/100, cfg['max_order_inr'])
+    prior = []
     for day, rows in days:
+        validate(rows)
         for index in range(len(rows)-1):
             now = rows[index].time+dt.timedelta(minutes=5)
-            candidate = entry(rows[:index+1], symbol, now, cfg, setup=current_plan['setup'],
+            candidate = entry(prior+rows[:index+1], symbol, now, cfg, setup=current_plan['setup'],
                               level=current_plan.get('level'), or_minutes=(current_plan.get('opening_range') or {}).get('minutes', 15),
-                              calendar=calendar)
-            if candidate['status'] != 'triggered':
+                              min_volume_x=current_plan.get('min_volume_x'), calendar=calendar)
+            if not candidate['eligible']:
                 continue
-            p = plan(candidate, now, tick, cfg, current_plan['stop_spec'], current_plan['target_spec'], rows[:index+1], calendar)
-            p['entry'] = rounded(rows[index+1].open, tick, ROUND_CEILING)
-            if not p['stop'] < p['entry'] < p['target']:
-                break
-            from .paper import budget
-            sized = budget(p, now, cfg)['sizing']
-            if not sized['qty'] or sized['net_reward_risk'] < cfg['min_reward_risk']:
-                break
-            outcome, exit_price, last = None, None, None
-            for row in rows[index+1:]:
-                if row.time.time() >= dt.time.fromisoformat(p['flat_by']):
-                    break
-                last = row
-                if row.low <= p['stop']:
-                    outcome, exit_price = 'stop', min(row.open, p['stop'])
-                    break
-                if row.high >= p['target']:
-                    outcome, exit_price = 'target', p['target']
-                    break
-            if last is None:
-                break
-            outcome, exit_price = outcome or 'close', last.close if exit_price is None else exit_price
-            pnl = (exit_price-p['entry'])*sized['qty']-costs(p['entry'], exit_price, sized['qty'], exchange_of(symbol), cfg.get('costs'))['total']
-            trades.append(dict(date=day.isoformat(), signal_time=rows[index].time.isoformat(),
-                               entry_time=rows[index+1].time.isoformat(), entry=p['entry'], stop=p['stop'],
-                               target=p['target'], qty=sized['qty'], exit=exit_price, outcome=outcome, net_pnl=pnl))
+            p = plan(candidate, now, tick, cfg, current_plan['stop_spec'], current_plan['target_spec'],
+                     rows[:index+1], calendar, flat_by=current_plan.get('flat_by'))
+            trade = replay_trade(p, rows[index+1:], available, cfg['max_loss_per_trade_inr'],
+                                 exchange_of(symbol), cfg.get('costs'), cfg['min_reward_risk'],
+                                 cfg.get('entry_buffer_bps', 5.))
+            if trade:
+                trades.append(dict(trade, date=day.isoformat()))
             break
+        prior.extend(rows)
     return dict(sessions=len(days), triggered=len(trades), trades=trades,
                 net_pnl=sum(t['net_pnl'] for t in trades), costs_included=True, entry_rule='next-bar open')
 

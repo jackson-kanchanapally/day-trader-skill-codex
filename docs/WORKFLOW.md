@@ -68,7 +68,7 @@ python3 trader-alerts/alerts.py check --workspace trader/original-demo \
   --csv tests/fixtures/india/synthetic.csv --now 2026-10-19T09:35:00+05:30
 ```
 
-Expected: entry ₹102.30, midpoint stop ₹99.95, 2R target ₹107.00, 195 shares, estimated loss including costs ₹498.88, net reward/risk approximately 1.75 and `READY_PAPER_TICKET`. **No approval or fill is recorded by these commands.** The short fixture cannot supply the twenty prior sessions required for a simulation:
+Expected: entry ₹102.30, midpoint stop ₹99.95, 2R target ₹107.00, 188 shares sized at a conservative ₹102.40 estimate (5 bps reserve, rounded up to tick), estimated loss including costs ₹499.79, net reward/risk approximately 1.65 and `READY_PAPER_TICKET`. **No approval or fill is recorded by these commands.** The short fixture cannot supply the twenty prior sessions required for a simulation:
 
 ```bash
 python3 trader-timemachine/timemachine.py run --write --workspace trader/original-demo \
@@ -96,7 +96,7 @@ For `.NS` stocks, unavailable or incomplete Yahoo five-minute/daily snapshots au
 
 `--csv FILE` accepts one or multiple symbols/intervals with the existing `symbol,interval,time,open,high,low,close,volume` schema. `--offline DIR` accepts per-symbol CSV or Yahoo chart JSON files. Future/forming rows are excluded before numeric analysis; null slots remain gaps, and partial OHLCV values fail. No resampling, fabricated volume or mixed-provider candle reconstruction occurs.
 
-Regular cash-equity clock checks use the configured calendar. The strategy conservatively excludes all data at/after 15:15 IST to avoid closing-auction contamination. Defaults are no entries before 09:30, none after 15:00 and flatten at 15:10; earlier custom boundaries are supported. Built-in coverage remains 2026 and BSE shares the bundled calendar. Supply a verified calendar for other years/exchange-specific differences. Special sessions are unsupported.
+Regular cash-equity clock checks use the configured calendar. The strategy conservatively excludes all data at/after 15:15 IST to avoid closing-auction contamination. Defaults are no entries before 09:30, none after 15:00 and flatten at 15:10; earlier custom boundaries are supported. Built-in coverage remains 2026 and BSE shares the bundled calendar. Supply a verified calendar for other years/exchange-specific differences. Sourced exceptional session windows are supported by the calendar; ORB analysis fails explicitly for evening or shortened sessions. Coverage warnings appear in the final 30 days, and expired coverage fails closed. See [execution assumptions](EXECUTION.md).
 
 NSE website access remains experimental and subject to the restrictions documented in [NOTICE.md](../NOTICE.md). This migration does not establish provider permission or remove release blockers.
 
@@ -115,9 +115,13 @@ The example is a schema, not verified metadata for any real symbol. Obtain the a
 
 The authoritative ledger is `trader/state/paper.sqlite`, or the corresponding path under `--workspace`. SQLite transactions keep approval, fill, cash and FIFO lots consistent. Initial capital is fixed for that paper account; choose another workspace to start a differently funded account. `portfolio.json` and `state/broker.json` are exports; editing them does not change ledger balances. There is no broker account reconciliation or general external-portfolio import.
 
-`ticket.py show` rechecks the order, configuration, portfolio, fresh completed prices, applicable metadata and signal age. Only an actual user reply beginning with an unambiguous yes for the one shown ticket may be passed to `ticket.py approve --reply ...`. Approval and `fill --fingerprint ... --qty ... --price ... --fill-id ...` record **local simulated events**, never an order. A fill requires the approved full quantity, dated approval, unchanged state/configuration and an explicit tick-aligned simulated price. Duplicate IDs/orders, stale approvals, risk breaches and oversells fail without changing cash.
+`ticket.py show` rechecks the order, configuration, portfolio, fresh completed prices, applicable metadata and signal age. Only an actual user reply beginning with an unambiguous yes for the one shown ticket may be passed to `ticket.py approve --reply ...`. Approval and `fill --fingerprint ... --qty ... --price ... --fill-id ...` record **local simulated events**, never an order. A fill requires the approved full quantity, dated approval, unchanged state/configuration and an explicit tick-aligned simulated price. Buy fills also require `--fill-bar FILE`, an observed OHLCV JSON object with `time,open,high,low,close,volume`; the price must equal the first available candle open at/after approval under the canonical policy. A past signal close cannot stand in for a fill. Duplicate IDs/orders, stale approvals, risk breaches and oversells fail without changing cash.
 
 The ledger's `placed` event label is an internal compatibility label for a **simulated** full fill, with `simulation: true` and `execution_enabled: false`; it is not a brokerage acknowledgement. Partial fills, automatic bracket execution and externally confirmed fills are unsupported. Stop/target alerts provide information; they do not update holdings automatically. Use `flatten` to create a sell proposal, run risk again, then obtain the user's approval before recording a simulated exit.
+
+Sizing uses `entry_buffer_bps` (default 5) above the signal reference, rounded up to tick. This is a sizing reserve; it is not a second slippage charge. Actual candle-open fills retain the fixed proposed quantity and must pass cost-inclusive risk/cash checks again. Set the reserve explicitly to zero to reproduce the earlier sizing assumption. Slippage remains charged once through the cost model.
+
+`volume_spike` and intraday `--min-volume-x` now mean prior-session same-time RVOL. `relative_volume` also reports opening 5/15-minute and cumulative comparisons, sample counts and exclusion reasons. Configure `rvol_lookback` (20 scheduled sessions) and `rvol_min_samples` (5). Missing windows are excluded; insufficient samples or an all-zero baseline produce null RVOL and block volume-filtered signals. A daily scan still compares completed daily volume.
 
 Sizing/costs retain the intraday cash-equity assumptions from `india/market.py`; `costs` in the workflow configuration can override verified rates. The example is not a broker fee schedule. No delivery taxation, short selling, options, fractional shares, margin or live mode is supported.
 

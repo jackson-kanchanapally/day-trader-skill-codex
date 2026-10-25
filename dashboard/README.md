@@ -30,8 +30,11 @@ the existing independent-team view; mobile has a view selector in the header.
 Company details separate setup strength, current tradeability and independent risk.
 Daily freshness uses the current clock and covered calendar, while explicit flags
 show extension, unusual volume and volatility. Missing spread, price-band or halt
-evidence remains unavailable. The review form carries the selected symbol/cutoff
-and requires your account inputs, with no example capital or risk prefilled.
+evidence remains unavailable. Stock research starts with a symbol; bare NSE codes
+such as `SSWL` are accepted. The selected scan date is preserved automatically,
+and optional date controls use a regular date/time picker. Choose **Plan a paper
+trade** to add capital and per-trade risk. Other account settings remain optional
+in the form and are obtained before actual sizing; no account values are assumed.
 
 **Individual research** shows both saved coordinator assessments and actual team
 sessions, with distinct labels and source bindings. **Trading journal** reads the
@@ -72,6 +75,10 @@ Opportunities refresh from saved files every ten seconds, not from a live feed.
 ## Independent team
 
 Each specialist has an animated person at a desk: sleeping while queued/dispatched, typing after a recorded running event, and holding a report after a validated review is saved. Completed reviews include BLOCK and UNAVAILABLE outcomes; the verdict badge remains separate. Failed or invalid work shows an attention marker. Click a desk (or focus it and press Enter) to open the agent workspace with its report, numerical evidence, sources and raw JSON. Escape closes it. Open workspaces update with the session, and reduced-motion preferences disable animations.
+
+The specialist board uses compact mini desks. Names, role descriptions, lifecycle
+states, verdicts, search/filter controls and the complete detail workspace remain
+available; the activity guide is expandable.
 
 - Queued: no native delegation recorded.
 - Dispatched: native identity recorded, without a confirmed running event.

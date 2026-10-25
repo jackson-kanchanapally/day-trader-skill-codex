@@ -210,6 +210,7 @@ function Chart({ candles, vwap }) {
 
 function App() {
   const [reviewSeed, setReviewSeed] = useState(null),
+    [requestKey, setRequestKey] = useState(0),
     [researchTarget, setResearchTarget] = useState(""),
     [researchSymbol, setResearchSymbol] = useState("");
   const viewNames = {
@@ -333,6 +334,7 @@ function App() {
     requestAnimationFrame(() => scroll(id));
   }
   function openRequest(mode = "review", seed = null) {
+    setRequestKey((value) => value + 1);
     setReviewSeed(seed);
     setRequestMode(mode);
     requestAnimationFrame(() => dialog.current.showModal());
@@ -767,18 +769,22 @@ function App() {
                               {r.phase}
                             </span>
                           </div>
-                          <AgentDesk
-                            phase={r.phase}
-                            index={roles.findIndex(
-                              (item) => item.role === r.role,
-                            )}
-                            verdict={r.review?.verdict}
-                          />
-                          <h3>{names[r.role]}</h3>
-                          <p>{descriptions[r.role]}</p>
+                          <div className="agent-mini-body">
+                            <AgentDesk
+                              phase={r.phase}
+                              index={roles.findIndex(
+                                (item) => item.role === r.role,
+                              )}
+                              verdict={r.review?.verdict}
+                            />
+                            <div className="agent-mini-copy">
+                              <h3>{names[r.role]}</h3>
+                              <p>{descriptions[r.role]}</p>
+                            </div>
+                          </div>
                           <div className="card-bottom">
                             <Badge value={r.review?.verdict || "PENDING"} />
-                            <span className="open-workspace">Open ↗</span>
+                            <span className="open-workspace">Details ↗</span>
                           </div>
                         </button>
                       ))}
@@ -788,7 +794,9 @@ function App() {
                         No agents match this filter.
                       </p>
                     )}
-                    <p className="micro network-note">
+                    <details className="team-legend">
+                      <summary>How activity is shown</summary>
+                      <p className="micro network-note">
                       Sleeping desks are waiting; working desks have a recorded
                       running event; a report means the review is complete,
                       including BLOCK or UNAVAILABLE. Scanner, news and analyst
@@ -796,7 +804,8 @@ function App() {
                       risk → broker → alerts follow their prerequisites.
                       “Dispatched” alone does not prove an agent is currently
                       running.
-                    </p>
+                      </p>
+                    </details>
                   </section>
                   <div className="detail-row">
                     <section id="activity" className="panel activity-panel">
@@ -986,6 +995,7 @@ function App() {
         mode={requestMode}
         setMode={setRequestMode}
         seed={reviewSeed}
+        requestKey={requestKey}
       />
     </div>
   );
