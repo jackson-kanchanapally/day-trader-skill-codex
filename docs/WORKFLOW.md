@@ -1,5 +1,54 @@
 # Original day-trader workflow for Indian stocks
 
+Current compatibility and executed regressions are recorded in
+[parity implementation results](PARITY_IMPLEMENTATION_RESULTS.md).
+G01–G06 are implemented; G07–G13 remain deferred. This is not complete upstream parity.
+
+| Area | Active behavior / boundary |
+| --- | --- |
+| Forecast exits | Shared canonical event rule: opening gaps precede unknown intrabar touches; stop wins an ambiguous bar; costs remain included |
+| Flatten | Default 15:10, explicit maximum 15:15; all horizons and prior-session replay honor the plan; off-grid times fail rather than round forward |
+| Closing sells | Open sourced session, fresh price, applicable tick, held quantity and exact approval required; unsupported ORB entry hours alone do not block a close |
+| Alerts | Actual calendar hours and next opening; unknown subsequent coverage gives null/reason; opening bell deduplicates per configured session event |
+| Daily scanner | Expected completed-session date required; `MATCH`, `NO_SETUP`, `STALE`, `UNAVAILABLE`, `FAILED` are distinct; stale data never enters current hits |
+| Budget | `--limit [PRICE]`, `--prices FILE`, `--portfolio FILE`; an existing local ledger overrides estimates and rejects conflicting snapshots |
+| Deferred | Broad-fetch batching, two-stage caps, historical watch replay, story merging, financial expansion, forward promotion, weights and partial execution fills |
+
+For example, after a valid plan exists:
+
+```sh
+python3 trader-budget/size.py --capital 100000 --risk 500 \
+  --limit 100.50 --prices /path/to/dated-prices.json \
+  --portfolio /path/to/paper-inr-snapshot.json --write
+```
+
+The price JSON uses `prices: {SYMBOL: NUMBER}` and
+`detail: {SYMBOL: {time: AWARE_ISO_TIMESTAMP, source: SOURCE}}`. Explicit stale,
+future or missing requested quotes fail. Portfolio snapshots must declare
+`paper: true`, `currency: "INR"`, cash and whole-share positions. They are
+caller-supplied paper evidence, not an authenticated broker balance. Without
+cash evidence, configured capital is explicitly an estimate. `--limit` alone
+uses the planned entry; off-tick limits fail. A limit below market is never
+assumed filled; only an eligible canonical open within the approved limit can
+fill later, with no hindsight quantity increase.
+
+Budget proposals are provisional. Changed observation/provenance or calendar
+evidence invalidates an older risk decision. A new query timestamp with the
+same underlying observations does not. Paper approvals freeze sourced calendar
+hours; a fill outside those hours fails. Closing sells still need dated quote
+and current applicable tick evidence. Evening source candles may be supplied
+by authorized CSV; online providers do not gain new special-session support.
+
+For daily scans, pre-close excludes the current daily candle; at/after the
+configured actual close it may be included. Weekend/holiday and explicit
+historical cutoffs use their own expected completed session. Insufficient
+calendar coverage fails rather than fabricating a prior session.
+
+The audit's Appendix B reproduces the **pre-fix** observations. Current active
+regressions are `tests/test_parity_*.py`; original-role tests using
+`tests/_load.py` still target archived US implementations. Do not treat legacy
+test success as proof of an active Codex/Indian capability.
+
 The reference is [Jakeschincariol/day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill), commit `3d0f4ef6986f4984b7c6bd46f7ff4f87744c3abd`. All eleven original Python utilities remain unchanged under `legacy/`. Active Indian entrypoints reuse selected original pure functions through explicit adapters in `workflow/`; they never invoke the US CLI or its broker connector instructions.
 
 ```text

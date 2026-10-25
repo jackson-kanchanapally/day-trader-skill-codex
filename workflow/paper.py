@@ -8,10 +8,11 @@ import math
 import re
 import sqlite3
 
-from india.execution import entry_fill, estimate_entry, size_position, validate_fill
+from india.execution import entry_fill, estimate_entry, size_position, validate_fill, tick_price
 from india.market import DEFAULT_CALENDAR, costs
 from .common import config as checked_config, clock, digest, envelope, exchange_of, indian_words, number, upstream, utc
 from .data import verify_tick
+from india.security import security_records
 
 
 def one_way_cost(price, qty, side, exchange, config=None):
@@ -29,23 +30,65 @@ def order_hash(order):
     return digest(order)
 
 
-def budget(p, now, cfg):
+def market_fingerprint(prices_doc):
+    """Bind observations/provenance, excluding the clock of a repeated query."""
+    return digest({key:prices_doc.get(key,{} if key != 'errors' else []) for key in ('prices','detail','errors')})
+
+
+def budget(p, now, cfg, *, prices_doc=None, portfolio=None, limit_price=None):
     checked_config(**cfg)
     capital = number(cfg.get('budget'), 'budget')
     risk = number(cfg['max_loss_per_trade_inr'], 'max_loss_per_trade_inr')
-    # Cash buffer and concentration/order limits constrain the cash available
-    # to the same cost-aware binary-search sizing used by the Indian engine.
-    available = min(capital*(1-cfg['cash_buffer_pct']/100), capital*cfg['max_position_pct']/100, cfg['max_order_inr'])
-    result = size_position(p, available, risk, exchange_of(p['symbol']), cfg.get('costs'), cfg.get('entry_buffer_bps', 5.))
+    if p.get('side','buy') not in ('buy','long'):
+        raise ValueError('Budget supports long cash-equity proposals only')
+    tick = number(p['tick'],'tick')
+    for name in ('entry','stop','target'):
+        if abs(tick_price(number(p[name],name),tick,True)-p[name]) > 1e-8:
+            raise ValueError(name+' does not align with tick')
+    reference = p['entry']
+    if prices_doc is not None:
+        value = prices_doc.get('prices',{}).get(p['symbol'])
+        info = prices_doc.get('detail',{}).get(p['symbol'],{})
+        if value is None or not info.get('time'):
+            raise ValueError('A dated fresh completed quote is required')
+        from india.data import timestamp
+        stamp = timestamp(info['time'])
+        if stamp.date() != now.date() or not 0 <= (now-stamp).total_seconds() <= 900:
+            raise ValueError('A dated fresh completed quote is required')
+        reference = max(reference,number(value,'quote price'))
+    holding_mark = reference
+    buffer = cfg.get('entry_buffer_bps',5.)
+    if limit_price is not None:
+        limit_price = number(limit_price,'limit price')
+        if abs(tick_price(limit_price,tick,True)-limit_price) > 1e-8:
+            raise ValueError('Limit price does not align with tick')
+        reference,buffer = limit_price,0.
+    sizing_plan = dict(p,entry=reference)
+    estimated = estimate_entry(sizing_plan,buffer)
+    cash,held = capital,0
+    if portfolio is not None:
+        validate_portfolio(portfolio)
+        cash = float(portfolio['cash'])
+        held = sum(float(row.get('shares',row.get('qty',0))) for row in portfolio.get('positions',[]) if row.get('ticker',row.get('symbol')) == p['symbol'])
+    available = max(0,min(cash-capital*cfg['cash_buffer_pct']/100,
+                          capital*cfg['max_position_pct']/100-held*max(holding_mark,estimated),cfg['max_order_inr']))
+    context = dict(cash_basis='supplied-paper-snapshot' if portfolio is not None else 'configured-capital-estimate',
+                   portfolio_sha256=digest(portfolio) if portfolio is not None else None,
+                   prices_sha256=market_fingerprint(prices_doc) if prices_doc is not None else None,
+                   available_inr=available,assumed_filled=False)
+    result = (size_position(sizing_plan,available,risk,exchange_of(p['symbol']),cfg.get('costs'),buffer)
+              if available > 0 else dict(sizing_plan,qty=0,estimated_entry=estimated))
     if not result['qty'] or result['net_reward_risk'] < cfg['min_reward_risk']:
-        return envelope('budget', now, status='BLOCKED', reason='COST_OR_RISK_LIMIT', orders=[], sizing=result)
-    if result['qty']*p['entry'] < cfg['min_order_inr']:
-        return envelope('budget', now, status='BLOCKED', reason='BELOW_MIN_ORDER', orders=[], sizing=result)
-    order = dict(symbol=p['symbol'], side='buy', qty=str(result['qty']), type='market',
+        return envelope('budget', now, status='BLOCKED', reason='COST_OR_RISK_LIMIT', orders=[], sizing=result,context=context)
+    if result['qty']*reference < cfg['min_order_inr']:
+        return envelope('budget', now, status='BLOCKED', reason='BELOW_MIN_ORDER', orders=[], sizing=result,context=context)
+    order = dict(symbol=p['symbol'], side='buy', qty=str(result['qty']), type='limit' if limit_price is not None else 'market',
                  time_in_force='day', order_class='bracket', stop_loss_stop_price=str(p['stop']),
                  take_profit_limit_price=str(p['target']), plan=p, tick=p['tick'],
-                 why='Completed-bar '+p['setup']+'; proposed local paper bracket only')
-    return envelope('budget', now, status='proposed', orders=[order], sizing=result,
+                 why='Completed-bar '+p['setup']+'; proposed local paper bracket only',proposal_context=context)
+    if limit_price is not None:
+        order['limit_price'] = str(limit_price)
+    return envelope('budget', now, status='proposed', orders=[order], sizing=result,context=context,
                     note='No broker-side bracket exists. Risk check and exact-ticket user approval precede a local paper record.')
 
 
@@ -83,7 +126,11 @@ def risk(orders, now, cfg, portfolio, prices_doc, state=None, master=None, calen
     if len(exchanges) != 1:
         raise ValueError('Check NSE and BSE batches separately against their exchange calendars')
     exchange = exchanges.pop()
-    cal.require_strategy_session(now.date(), exchange)
+    if any(o.get('side') == 'buy' for o in orders):
+        cal.require_strategy_session(now.date(), exchange)
+    from india.market import session
+    market_open = session(now,cal,exchange)
+    applicable_master = security_records(list((master or {}).values()),now)
     m = upstream('risk', cal, exchange)
     m.TICKER = re.compile(r'^[A-Z0-9&.\-]+\.(NS|BO)$')
     m.fingerprint = order_hash
@@ -103,6 +150,8 @@ def risk(orders, now, cfg, portfolio, prices_doc, state=None, master=None, calen
     for order, review in zip(orders, result['results']):
         sym, side = order['symbol'], order.get('side')
         extra = []
+        if not market_open:
+            extra.append('No open sourced exchange session for this order')
         if order.get('time_in_force', 'day') != 'day' or order.get('extended_hours'):
             extra.append('Indian paper orders support regular-session DAY instructions only')
         if order.get('type', 'market') not in ('market', 'limit'):
@@ -110,7 +159,7 @@ def risk(orders, now, cfg, portfolio, prices_doc, state=None, master=None, calen
         q = number(order.get('qty', 0), 'qty', zero=True)
         if not q or q != int(q) or order.get('notional') is not None:
             extra.append('Only positive whole-share orders are supported')
-        check = verify_tick(sym, order.get('tick'), master or {})
+        check = verify_tick(sym, order.get('tick'), applicable_master)
         review['tick_verification'] = check
         if check['status'] != 'VERIFIED':
             extra.append('Applicable tick metadata '+check['status'])
@@ -125,8 +174,8 @@ def risk(orders, now, cfg, portfolio, prices_doc, state=None, master=None, calen
                     extra.append('Entry signal is forming, expired or belongs to another session')
             if clock(p.get('as_of')) > now:
                 extra.append('Plan cutoff is in the future')
-            if sym not in times or not 0 <= (utc(now)-times[sym]).total_seconds() <= 900:
-                extra.append('A dated fresh completed price is required')
+        if sym not in times or not 0 <= (utc(now)-times[sym]).total_seconds() <= 900:
+            extra.append('A dated fresh completed price is required')
         tick = number(order.get('tick'), 'tick')
         for field in ('limit_price', 'stop_price', 'stop_loss_stop_price', 'take_profit_limit_price'):
             if field in order:
@@ -167,7 +216,8 @@ def risk(orders, now, cfg, portfolio, prices_doc, state=None, master=None, calen
         if extra:
             review['verdict'] = 'BLOCK'
     result.update(envelope('risk', now), as_of=now.isoformat(), config_sha256=digest(cfg),
-                   portfolio_sha256=digest(portfolio), prices_sha256=digest(prices_doc),
+                   portfolio_sha256=digest(portfolio), prices_sha256=market_fingerprint(prices_doc),
+                   calendar_sha256=digest(cal.document),
                    metadata_sha256=digest(master or {}),
                    **{'pass': sum(r['verdict'] == 'PASS' for r in result['results']),
                       'block': sum(r['verdict'] == 'BLOCK' for r in result['results'])})
@@ -182,6 +232,10 @@ def ticket(order, review_doc, portfolio, now, cfg, prices_doc, master, calendar=
         reasons.append('Configuration or paper portfolio changed; rerun risk')
     if review_doc.get('metadata_sha256') != digest(master):
         reasons.append('Security metadata changed; rerun risk')
+    if review_doc.get('prices_sha256') != market_fingerprint(prices_doc):
+        reasons.append('Market evidence changed; rerun risk')
+    if review_doc.get('calendar_sha256') != digest((calendar or DEFAULT_CALENDAR).document):
+        reasons.append('Calendar evidence changed; rerun risk')
     age = (now-clock(review_doc.get('as_of'))).total_seconds()
     if not 0 <= age <= 300:
         reasons.append('Risk decision is expired or future-dated')
@@ -195,6 +249,7 @@ def ticket(order, review_doc, portfolio, now, cfg, prices_doc, master, calendar=
     return envelope('broker', now, fingerprint=order_hash(order), ready=not reasons,
                     status='READY_PAPER_TICKET' if not reasons else 'BLOCKED', reasons=reasons,
                     order=order, max_loss=current['results'][0].get('max_loss'), config_sha256=digest(cfg),
+                    calendar_document=(calendar or DEFAULT_CALENDAR).document,
                     tick_verification=current['results'][0]['tick_verification'],
                     note='User approval permits only a local simulated fill; no external order is sent. Embedded plan metadata records creation-time inputs; top-level tick_verification is the current check.')
 
@@ -244,6 +299,7 @@ class Ledger:
         event = dict(id=key, status='approved', at=now.isoformat(), date=now.date().isoformat(),
                      fingerprint=paper_ticket['fingerprint'], reply=reply, order=paper_ticket['order'],
                      max_loss=paper_ticket.get('max_loss'), portfolio_sha256=digest(self.portfolio()),
+                     calendar_document=paper_ticket.get('calendar_document',DEFAULT_CALENDAR.document),
                      config_sha256=paper_ticket['config_sha256'])
         try:
             with self.db:
@@ -266,6 +322,9 @@ class Ledger:
             if not row:
                 raise ValueError('No explicit user approval for this exact paper order')
             approval = json.loads(row[0])
+            from india.market import Calendar, session
+            if not session(now,Calendar(approval.get('calendar_document',DEFAULT_CALENDAR.document)),exchange_of(approval['order']['symbol'])):
+                raise ValueError('No open sourced exchange session for this fill')
             if approval['config_sha256'] != digest(cfg):
                 raise ValueError('Configuration changed after approval; rerun risk')
             if not 0 <= (now-clock(approval['at'])).total_seconds() <= 300:

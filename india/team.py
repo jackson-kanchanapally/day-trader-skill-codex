@@ -225,7 +225,7 @@ def _artifacts(context, bars, baseline, simulations, seed):
          'submitted':False,'filled':False,'requires_fresh_review_after_edit':True})
     alerts=[]
     if order:
-        for kind,level in (('stop',order['stop']),('target',order['target']),('flat_by','15:15')):
+        for kind,level in (('stop',order['stop']),('target',order['target']),('flat_by',plan.get('flat_by','15:10'))):
             alerts.append({'id':digest({'order':fingerprint,'kind':kind})[:20],'kind':kind,'level':level,
                            'symbol':s['symbol'],'order_fingerprint':fingerprint})
     decisions['alerts']=_role('alerts',context,'PASS' if alerts else 'UNAVAILABLE',

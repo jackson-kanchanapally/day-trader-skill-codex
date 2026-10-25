@@ -115,9 +115,11 @@ def report(bars, as_of, symbol, tick, capital, risk, rr=2., config=None, calenda
             'analysis_window':{'start':'09:15','end':'15:15','timezone':'Asia/Kolkata'},
             'strategy_open':session(as_of,calendar,exchange) and as_of.astimezone(IST).time() < ANALYSIS_END}
 
-def backtest(bars, symbol, tick, capital, risk, rr=2., config=None, calendar=None):
+def backtest(bars, symbol, tick, capital, risk, rr=2., config=None, calendar=None, *, flat_by='15:10'):
     """Fixed range-low ORB adapter over the shared conservative fill engine."""
     validate(bars)
+    from .execution import flatten_slot
+    flatten_slot(dict(flat_by=flat_by))
     bars = [b for b in bars if b.time.astimezone(IST).time() < ANALYSIS_END]
     if not all(math.isfinite(x) and x > 0 for x in (tick, capital, risk, rr)):
         raise ValueError('Invalid backtest parameters')
@@ -139,6 +141,7 @@ def backtest(bars, symbol, tick, capital, risk, rr=2., config=None, calendar=Non
         for index in range(3, len(rows)-1):
             p = proposal(rows[:index+1], tick, rr)
             if p:
+                p['flat_by'] = flat_by
                 trade = replay_trade(p, rows[index+1:], capital, risk, exchange, config)
                 if trade:
                     trades.append(trade)

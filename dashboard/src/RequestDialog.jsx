@@ -15,7 +15,7 @@ const localTime = (value) => {
   return new Date(date.getTime() + 19800000).toISOString().slice(0, 16);
 };
 
-export default function RequestDialog({ dialog, mode, setMode, seed, requestKey }) {
+export default function RequestDialog({ dialog, mode, setMode, seed, requestKey, runner }) {
   const [symbol, setSymbol] = useState("");
   const [purpose, setPurpose] = useState("research");
   const [timeMode, setTimeMode] = useState("latest");
@@ -75,7 +75,7 @@ Inspect original setup evidence and permitted market data, dated original news/f
 
   return <dialog ref={dialog} className="request-dialog request-simple" aria-labelledby="request-title">
     <div className="modal-head"><div><span className="eyebrow">TRADE DESK</span><h2 id="request-title">{title}</h2></div><button className="icon-button" onClick={() => dialog.current.close()} aria-label="Close Codex request">×</button></div>
-    <p>Copy the request, then paste it into Codex to run.</p>
+    <p>Run this request in Codex and follow its progress here.</p>
     <label className="request-type">Task<select aria-label="Task" value={mode} onChange={(e) => { setMode(e.target.value); setPurpose("research"); }}><option value="review">Research a stock</option><option value="scan">Scan the NSE market</option><option value="universe">Get the NSE stock list</option></select></label>
     {mode === "review" ? <>
       <label className="request-stock-label">Stock symbol<input autoFocus autoComplete="off" spellCheck="false" value={symbol} placeholder="e.g. SSWL or RELIANCE" onChange={(e) => setSymbol(e.target.value.toUpperCase())} /></label>
@@ -90,7 +90,11 @@ Inspect original setup evidence and permitted market data, dated original news/f
       <details key={`dates-${requestKey}`} className="request-options"><summary>Date options <small>Optional</small></summary><label className="request-type">Data to research<select aria-label="Data to research" value={timeMode} onChange={(e) => { setTimeMode(e.target.value); if (e.target.value === "custom" && !customTime) setCustomTime(localTime(seed?.as_of)); }}><option value="latest">Latest available data</option>{seed?.as_of && <option value="saved">This saved scan</option>}<option value="custom">Choose a date and time</option></select></label>{timeMode === "custom" && <label className="request-stock-label">Date and time · IST<input type="datetime-local" value={customTime} onChange={(e) => setCustomTime(e.target.value)} /></label>}{!timeValid && <p className="request-error">Choose a date and time that has already passed.</p>}</details>
     </> : <p>{mode === "scan" ? "Refresh the NSE list and scan every saved symbol for daily setups. The result includes all matches and coverage failures." : "Discover NSE cash-equity symbols and save the list for market scans."}</p>}
     <details key={`preview-${requestKey}`} className="request-preview"><summary>Preview request</summary><pre className="prompt">{prompt}</pre></details>
-    <button className="primary" disabled={!valid} onClick={async () => { try { await navigator.clipboard.writeText(prompt); setCopied(true); } catch { setCopyError(true); } }}>{copied ? "Copied ✓" : `${action} ↗`}</button>
+    <button className="primary" disabled={!valid || runner.busy || !runner.connection?.available || Boolean(runner.connection?.active_id)} onClick={async () => { if (await runner.start(prompt)) dialog.current.close(); }}>{runner.busy ? "Starting…" : "Run in Codex ↗"}</button>
+    {runner.connection?.active_id && <p className="request-help">A request is already active. <button onClick={() => { dialog.current.close(); runner.setOpen(true); }}>View progress</button></p>}
+    {runner.connection?.error && <p className="request-error">{runner.connection.error}</p>}
+    {runner.error && <p className="request-error" role="alert">{runner.error}</p>}
+    <button className="copy-request" disabled={!valid} onClick={async () => { try { await navigator.clipboard.writeText(prompt); setCopied(true); } catch { setCopyError(true); } }}>{copied ? "Copied ✓" : action}</button>
     <p className="micro" role="status">{copyError ? "Open Preview request to copy the text manually." : copied ? "Paste into Codex to run it." : mode === "review" && !code ? "Enter a stock symbol to continue." : ""}</p>
   </dialog>;
 }

@@ -13,6 +13,11 @@ python3 /absolute/path/to/trader-exit/exit.py show
 
 Writes `trader/plan.json`. Level entries require an explicit stop. A proposed stop cannot guarantee realized maximum loss.
 
+`flat_by` is a completed-bar boundary, default 15:10 and explicit maximum 15:15.
+The candle ending at that clock is the last held candle; off-grid times fail.
+Evening/shortened sessions remain unsupported for opening this ORB strategy.
+Closing existing paper holdings has separate sourced-session checks.
+
 ## Data and execution
 
 Resolve this directory through symlinks and invoke its tool by absolute path. All original-style tools accept `--workspace DIR` (default `trader/`), `--now ISO`, `--config FILE` and relevant provider/CSV options. A naive original-style clock is IST; prefer explicit offsets. See [workflow commands and contracts](../docs/WORKFLOW.md). Use a separate workspace from sealed independent-team sessions. `run.py analyze` and `run.py evaluate` retain the existing numerical/review modes.

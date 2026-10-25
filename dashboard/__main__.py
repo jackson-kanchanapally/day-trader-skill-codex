@@ -1,8 +1,9 @@
-"""Serve the local dashboard; the browser cannot spawn agents or submit orders."""
+"""Serve saved research and explicitly requested local Codex runs; no order API."""
 import argparse
 import datetime as dt
 import errno
 import json
+import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -12,6 +13,7 @@ from india.team import (ARTIFACTS, REQUIRED, VERDICTS, _source_check, load_sessi
 from .opportunities import OpportunityStore
 from .research import ResearchStore
 from .journal import paper_journal
+from .runner import CodexRunner, RunnerError
 
 STATIC=Path(__file__).resolve().parent/'dist'
 ORDER=('scanner','news','analyst','entry','exit','timemachine','budget','risk','broker','alerts')
@@ -130,17 +132,24 @@ def record_activity(directory, role, agent_id, state):
     write_json(path/'activity.json',data)
 
 
-def handler(root, workspace=None):
+def handler(root, workspace=None, runner=None):
     workspace=Path(workspace if workspace is not None else Path(root)/'_scanner').resolve()
     research_store=ResearchStore(workspace,root,sessions,session_view)
     opportunity_store=OpportunityStore(workspace,research=research_store)
     class Handler(BaseHTTPRequestHandler):
+        def local_host(self):
+            return self.headers.get('Host','') in ('127.0.0.1:'+str(self.server.server_port),'localhost:'+str(self.server.server_port))
+
         def do_GET(self):
             # Loopback only, no cross-origin browser access or DNS rebinding.
-            if self.headers.get('Host','') not in ('127.0.0.1:'+str(self.server.server_port),'localhost:'+str(self.server.server_port)):
+            if not self.local_host():
                 self.respond(403,dict(error='Local dashboard only'));return
             url=urlsplit(self.path).path
             try:
+                if url=='/api/runner':
+                    self.respond(200,runner.state() if runner else dict(available=False, runs=[], active_id=None, error='Direct runs are unavailable on this server.', execution_enabled=False));return
+                if url.startswith('/api/runs/') and runner:
+                    self.respond(200,runner.detail(unquote(url[len('/api/runs/'):])));return
                 if url=='/api/opportunities':
                     self.respond(200,opportunity_store.listing());return
                 if url.startswith('/api/opportunities/'):
@@ -167,6 +176,40 @@ def handler(root, workspace=None):
                          'Session is unavailable, incomplete or changed. Retrying on the next refresh.')
                 self.respond(409,dict(error=message))
 
+        def do_POST(self):
+            if not self.local_host():
+                self.respond(403,dict(error='Local dashboard only'));return
+            # A page on another origin must not be able to start local work.
+            origin = 'http://' + self.headers.get('Host','')
+            supplied = self.headers.get('X-Trader-Token','')
+            if (not runner or self.headers.get('Origin') != origin
+                    or not secrets.compare_digest(supplied,runner.token)):
+                self.respond(403,dict(error='Open the local dashboard and retry this action.'));return
+            if self.headers.get('Content-Type','').split(';')[0] != 'application/json':
+                self.respond(415,dict(error='JSON request required'));return
+            try:
+                length = int(self.headers.get('Content-Length','0'))
+                if not 0 < length <= 150000:
+                    self.respond(413,dict(error='Request is too large or empty'));return
+                doc=json.loads(self.rfile.read(length))
+                if not isinstance(doc,dict):
+                    raise RunnerError('Invalid request')
+                url=urlsplit(self.path).path
+                if url=='/api/runs' and set(doc)=={'prompt'}:
+                    self.respond(202,runner.start(doc['prompt']));return
+                parts=url.split('/')
+                if len(parts)==5 and parts[1:3]==['api','runs']:
+                    identifier,action=parts[3:]
+                    if action=='reply' and set(doc)=={'text'}:
+                        self.respond(202,runner.reply(identifier,doc['text']));return
+                    if action=='answer' and set(doc)=={'request_id','answer'}:
+                        self.respond(200,runner.answer(identifier,doc['request_id'],doc['answer']));return
+                    if action=='stop' and doc=={}:
+                        self.respond(202,runner.stop(identifier));return
+                self.respond(404,dict(error='Unknown run action'))
+            except (ValueError, OSError, TypeError, KeyError) as exc:
+                self.respond(409,dict(error=str(exc) if isinstance(exc,RunnerError) else 'Invalid or unavailable run request'))
+
         def respond(self, code, value, mime='application/json'):
             body=json.dumps(value,allow_nan=False).encode() if mime=='application/json' else value
             self.send_response(code)
@@ -186,6 +229,7 @@ def main():
     parser.add_argument('--sessions',default='trader/team',help='Directory containing team session folders')
     parser.add_argument('--workspace',default='trader',help='Scanner workspace containing watchlist.json and optional scan snapshots')
     parser.add_argument('--port',type=int,default=8765)
+    parser.add_argument('--codex-bin',help='Local Codex executable; defaults to codex on PATH')
     sub=parser.add_subparsers(dest='command')
     activity=sub.add_parser('activity',help='Coordinator records actual native lifecycle events; never fabricates progress')
     activity.add_argument('--session',required=True)
@@ -197,8 +241,9 @@ def main():
         try: record_activity(args.session,args.role,args.agent_id,args.state)
         except (ValueError,OSError,KeyError,TypeError) as exc: parser.exit(1,str(exc)+'\n')
         return
+    runner=CodexRunner(Path(__file__).resolve().parents[1],args.workspace,args.sessions,args.codex_bin)
     try:
-        server=ThreadingHTTPServer(('127.0.0.1',args.port),handler(Path(args.sessions).resolve(),Path(args.workspace).resolve()))
+        server=ThreadingHTTPServer(('127.0.0.1',args.port),handler(Path(args.sessions).resolve(),Path(args.workspace).resolve(),runner))
     except OSError as exc:
         if exc.errno == errno.EADDRINUSE:
             alternate = args.port+1 if args.port < 65535 else 8765
@@ -210,7 +255,9 @@ def main():
     print('Watching '+str(Path(args.sessions).resolve()),flush=True)
     try: server.serve_forever()
     except KeyboardInterrupt: pass
-    finally: server.server_close()
+    finally:
+        runner.close()
+        server.server_close()
 
 
 if __name__=='__main__': main()

@@ -3,11 +3,11 @@ import datetime as dt
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
 
 from india.analysis import indicators
-from india.execution import replay_trade, tick_price
+from india.execution import replay_trade, tick_price, flatten_slot
 from india.volume import relative_volume
 from india.data import IST, validate
 from india.forecast import _simulate, MIN_SESSIONS, MAX_SIMS
-from india.market import DEFAULT_CALENDAR
+from india.market import DEFAULT_CALENDAR, daily_completed
 from .common import clock, envelope, exchange_of, indian_words, number, upstream, utc
 from .data import verify_tick
 
@@ -101,22 +101,36 @@ def entry(bars, symbol, now, cfg, setup='orb', level=None, interval='5m', or_min
 
 def scan(data, symbols, now, cfg, mode='orb', calendar=None, min_price=0, min_volume=0, **kwargs):
     cal = calendar or DEFAULT_CALENDAR
-    hits, failed, checked = [], [], []
+    hits, failed, checked, stale, unavailable = [], [], [], [], []
     m = upstream('scanner', cal)
     for symbol in symbols:
         try:
             exchange = exchange_of(symbol)
             bars = data.history(symbol, '1d' if mode == 'daily' else '5m')
             if mode == 'daily':
-                rows = [b for b in bars if b.time.date() < now.date() and str(b.time.year) in cal.document.get(exchange, {}) and cal.trading_day(b.time.date(), exchange)]
+                expected = cal.last_completed_session(now,exchange)
+                if any(b.time.date() > now.date() for b in bars):
+                    raise ValueError('Future-dated daily candle')
+                if bars:
+                    validate(bars)
+                rows = [b for b in bars if daily_completed(b.time.date(),now,cal,exchange) and str(b.time.year) in cal.document.get(exchange, {}) and cal.trading_day(b.time.date(), exchange)]
                 if len(rows) < m.MIN_DAILY_BARS:
-                    raise ValueError('Daily scan requires at least 30 completed sessions')
+                    item = dict(symbol=symbol,status='UNAVAILABLE',reason='Daily scan requires at least 30 completed sessions',expected_session=expected.isoformat(),source=data.source)
+                    unavailable.append(item)
+                    checked.append(item)
+                    continue
+                if rows[-1].time.date() != expected:
+                    item = dict(symbol=symbol,status='STALE',reason='Latest completed trading session is missing',expected_session=expected.isoformat(),as_of=rows[-1].time.isoformat(),source=data.source)
+                    stale.append(item)
+                    checked.append(item)
+                    continue
                 tags, values = m.find_setups([b.close for b in rows])
                 item = dict(symbol=symbol, price=rows[-1].close, volume=rows[-1].volume,
                             setups=tags, as_of=rows[-1].time.isoformat(), source=data.source,
                             provider_attempts=getattr(data, 'attempts', {}).get((symbol, '1d'), []), **values)
                 average = sum(b.volume for b in rows[-20:])/20
                 item['volume_x'] = rows[-1].volume/average if average else None
+                item.update(status='MATCH' if tags else 'NO_SETUP',expected_session=expected.isoformat())
                 if tags and item['price'] >= min_price and item['volume'] >= min_volume:
                     hits.append(item)
                 checked.append(item)
@@ -130,9 +144,12 @@ def scan(data, symbols, now, cfg, mode='orb', calendar=None, min_price=0, min_vo
                     hits.append(dict(symbol=symbol, setups=['orb'], **{k: v for k, v in item.items() if k != 'symbol'}))
         except (ValueError, OSError, KeyError, TypeError, IndexError) as exc:
             failed.append({'symbol': symbol, 'error': str(exc)})
+            if mode == 'daily':
+                checked.append(dict(symbol=symbol,status='FAILED',reason=str(exc)))
     used_sources = sorted({row['source'] for row in checked if row.get('source')})
     return envelope('scanner', now, mode=mode, as_of=now.isoformat(), source=used_sources[0] if len(used_sources) == 1 else 'See per-symbol sources',
-                    universe=len(symbols), scanned=len(symbols)-len(failed), failed=failed,
+                    universe=len(symbols), scanned=len(symbols)-len(failed)-len(stale)-len(unavailable), failed=failed,
+                    stale=stale,unavailable=unavailable,
                     hits=hits, results=checked)
 
 
@@ -186,7 +203,7 @@ def plan(info, now, tick, cfg, stop=None, target='2R', bars=None, calendar=None,
     if at.second or at.microsecond or (at.hour*60+at.minute-9*60-15) % minutes:
         raise ValueError('Flat-by must align with the candle interval')
     confirmation = signal+dt.timedelta(minutes=minutes) if signal else None
-    if not dt.time(9, 15) < at < dt.time(15, 15) or (confirmation and confirmation.time() >= at):
+    if not dt.time(9, 15) < at <= dt.time(15, 15) or (confirmation and confirmation.time() >= at):
         raise ValueError('Flat-by must follow entry and precede 15:15 IST')
     target_price = rounded(float(computed['target']), tick, ROUND_CEILING)
     risk_per_share = e-float(computed['stop'])
@@ -264,7 +281,7 @@ def timemachine(bars, p, now, cfg, calendar=None, sims=10000, seed=19):
                    limitations=['Sampled scenarios are not forecasts or independent observations.', 'Historical fills use next-bar open, stop-first ambiguity and estimated costs.'])
     if len(days) < MIN_SESSIONS:
         return doc
-    if not p.get('signal_time') or clock(p['signal_time'])+dt.timedelta(minutes=5) != cutoff:
+    if not p.get('signal_time') or clock(p['signal_time'])+dt.timedelta(minutes=5) != cutoff or now-cutoff > dt.timedelta(minutes=5):
         doc['reason'] = 'STALE_PLAN'
         return doc
     current, missing = regular(bars, cutoff, '5m', cal, exchange_of(symbol))
@@ -281,16 +298,10 @@ def timemachine(bars, p, now, cfg, calendar=None, sims=10000, seed=19):
         return doc
     opening = cutoff.replace(hour=9, minute=15, second=0, microsecond=0)
     slot = int((cutoff-opening).total_seconds()//300)
-    until = int((dt.datetime.combine(cutoff.date(), dt.time.fromisoformat(p['flat_by']), IST)-opening).total_seconds()//300)
+    until = flatten_slot(p)
     if not 1 <= slot < until <= 72:
         doc['reason'] = 'OUTSIDE_HOLDING_WINDOW'
         return doc
-    # Reuse the existing cost-aware, gap-aware whole-bar bootstrap. Slice each
-    # complete session at the configured flatten boundary, without global mutation.
-    from types import FunctionType
-    scope = dict(_simulate.__globals__, SESSION_BARS=until)
-    simulate = FunctionType(_simulate.__code__, scope)
-    mc = simulate([rows[:until] for _, rows in days], sized, slot, sims, seed, exchange_of(symbol), cfg.get('costs'))
-    mc['until'] = p['flat_by']
+    mc = _simulate([rows for _, rows in days], sized, slot, sims, seed, exchange_of(symbol), cfg.get('costs'))
     doc.update(status='AVAILABLE', reason=None, mc=mc)
     return doc

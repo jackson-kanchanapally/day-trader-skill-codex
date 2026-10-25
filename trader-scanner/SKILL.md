@@ -13,6 +13,13 @@ python3 /absolute/path/to/trader-scanner/scan.py orb --symbols TCS.NS --provider
 
 Scans write `trader/watchlist.json` by default. Use `--no-write` for a preview; `--limit N` bounds a broad scan. The directory does not verify tick units or guarantee candle availability.
 
+Daily matches require the expected last completed session at the supplied
+calendar/cutoff. Today's incomplete daily candle is excluded before close and
+may be used after the actual close. Old histories are `STALE`, excluded from
+current hits. Inspect `stale`, `unavailable`, `failed` and per-symbol status.
+Historical `--now` scans use their historical expected session. Batching and
+two-stage confirmation remain deferred; this is still a per-symbol fetch loop.
+
 ## Data and execution
 
 Resolve this directory through symlinks and invoke its tool by absolute path. All original-style tools accept `--workspace DIR` (default `trader/`), `--now ISO`, `--config FILE` and relevant provider/CSV options. A naive original-style clock is IST; prefer explicit offsets. See [workflow commands and contracts](../docs/WORKFLOW.md). Use a separate workspace from sealed independent-team sessions. `run.py analyze` and `run.py evaluate` retain the existing numerical/review modes.

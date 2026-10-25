@@ -12,7 +12,7 @@ import urllib.request
 from india.data import Bar, IST, timestamp, validate, symbol_name
 from india.nse import NSEProvider
 from india.upstox import UpstoxProvider
-from india.market import DEFAULT_CALENDAR
+from india.market import DEFAULT_CALENDAR, daily_completed
 from india.security import security_master, verify_tick
 
 
@@ -69,14 +69,14 @@ class MarketData:
             if str(path).endswith(('.json', '.json.gz')):
                 raw = path.read_bytes()
                 doc = json.loads(gzip.decompress(raw) if raw[:2] == b'\x1f\x8b' else raw)
-                bars = parse_yahoo(doc, symbol, interval, self.as_of)
+                bars = parse_yahoo(doc, symbol, interval, self.as_of,self.calendar)
             else:
                 if self._rows is None or Path(self.csv_path).is_dir():
                     with open(path, newline='', encoding='utf-8') as f:
                         self._rows = list(csv.DictReader(f))
                 rows = [r for r in self._rows if r['symbol'] == symbol and r['interval'] == interval]
                 minutes = 1 if interval == '1m' else 5
-                rows = [r for r in rows if (timestamp(r['time']).date() < self.as_of.date() if interval == '1d' else timestamp(r['time'])+dt.timedelta(minutes=minutes) <= self.as_of)]
+                rows = [r for r in rows if (daily_completed(timestamp(r['time']).date(),self.as_of,self.calendar,'NSE' if symbol.endswith('.NS') else 'BSE') if interval == '1d' else timestamp(r['time'])+dt.timedelta(minutes=minutes) <= self.as_of)]
                 bars = [Bar(timestamp(r['time']), *(float(r[k]) for k in ('open', 'high', 'low', 'close', 'volume'))) for r in rows]
         else:
             if self.as_of > dt.datetime.now(IST):
@@ -87,7 +87,7 @@ class MarketData:
             bars = self._online_snapshot(symbol, interval)
         # Filter future observations before numeric validation for causal replays.
         cutoff = dt.timedelta(minutes=1 if interval == '1m' else 5)
-        bars = [b for b in bars if (b.time.date() < self.as_of.date() if interval == '1d' else b.time+cutoff <= self.as_of)]
+        bars = [b for b in bars if (daily_completed(b.time.date(),self.as_of,self.calendar,'NSE' if symbol.endswith('.NS') else 'BSE') if interval == '1d' else b.time+cutoff <= self.as_of)]
         self._cache[key] = validate(bars)
         self.sources[key] = self.source
         return self._cache[key]
@@ -128,7 +128,7 @@ class MarketData:
                         self._upstox = DirectoryUpstox(self.as_of, min(self.days, 28), self.instruments)
                     rows = self._upstox.history(symbol, interval)
                 step = dt.timedelta(minutes=1 if interval == '1m' else 5)
-                rows = validate([b for b in rows if (b.time.date() < self.as_of.date() if interval == '1d' else b.time+step <= self.as_of)])
+                rows = validate([b for b in rows if (daily_completed(b.time.date(),self.as_of,self.calendar,'NSE' if symbol.endswith('.NS') else 'BSE') if interval == '1d' else b.time+step <= self.as_of)])
                 usable, missing = self._coverage(rows, symbol, interval)
                 attempts.append(dict(provider=name, usable=usable, missing_strategy_bars=missing))
                 score = usable, -missing, len(rows)
@@ -154,7 +154,7 @@ class MarketData:
                 try:
                     req = urllib.request.Request('https://'+host+'.finance.yahoo.com'+path, headers={'User-Agent': 'Mozilla/5.0'})
                     with urllib.request.urlopen(req, timeout=20) as response:
-                        return parse_yahoo(json.load(response), symbol, interval, self.as_of)
+                        return parse_yahoo(json.load(response), symbol, interval, self.as_of,self.calendar)
                 except (ValueError, KeyError, TypeError, IndexError, OSError) as exc:
                     errors.append(str(exc))
                     if isinstance(exc, urllib.error.HTTPError):
@@ -205,7 +205,7 @@ class DirectoryUpstox(UpstoxProvider):
         return urllib.parse.quote(key, safe='')
 
 
-def parse_yahoo(doc, symbol, interval, as_of):
+def parse_yahoo(doc, symbol, interval, as_of, calendar=None):
     r = doc['chart']['result'][0]
     meta = r['meta']
     if meta.get('symbol', '').upper() != symbol or meta.get('currency') != 'INR':
@@ -221,7 +221,7 @@ def parse_yahoo(doc, symbol, interval, as_of):
         when = dt.datetime.fromtimestamp(epoch, IST)
         if interval != '1d' and (not dt.time(9, 15) <= when.time() < dt.time(15, 30) or when.second or when.minute % step or when+dt.timedelta(minutes=step) > as_of):
             continue
-        if interval == '1d' and when.date() >= as_of.date():
+        if interval == '1d' and not daily_completed(when.date(),as_of,calendar,'NSE' if symbol.endswith('.NS') else 'BSE'):
             continue
         values = [quotes.get(k, [])[i] if i < len(quotes.get(k) or []) else None for k in ('open', 'high', 'low', 'close', 'volume')]
         if all(v is None for v in values):

@@ -128,7 +128,7 @@ class Dashboard(unittest.TestCase):
         e.exception.close()
         with self.assertRaises(urllib.error.HTTPError) as e:
             urllib.request.urlopen(urllib.request.Request(base+'/api/sessions',data=b'{}',method='POST'))
-        self.assertEqual(e.exception.code,501)
+        self.assertEqual(e.exception.code,403)
         e.exception.close()
 
 

@@ -11,6 +11,16 @@ appear on every company page:
 - **Independent risk** requires a current exact-order review; neither a high score
   nor a historical PASS clears a new order.
 
+An explicit **Run in Codex** action submits the displayed prompt to the local
+Codex app-server in a new thread. The Codex request panel streams coordinator
+messages, surfaces real questions/tool permissions, supports follow-up turns and
+can interrupt work. Its run history lives in `--workspace/dashboard-runs/` and
+is not a specialist review, paper approval or fill. Merely polling these files
+never starts a turn. The coordinator still follows prerequisite/dispatch rules
+and the research contracts below; actual independent specialists retain native
+identities and their own sealed evidence/review files. No dashboard endpoint
+approves a paper ticket, records a simulated fill or places a live order.
+
 The page checks daily freshness against the most recent completed regular session
 at the current server clock. After 15:30 IST a trading day's daily candle becomes
 the expected session. Weekend and holiday hours do not make Friday's candle stale

@@ -12,6 +12,15 @@ python3 /absolute/path/to/trader-timemachine/timemachine.py chart
 
 Writes `trader/timemachine.json`; chart returns portable percentile bands and sample paths. Disclose unavailable evidence instead of inventing odds. Scenario paths are not independent market observations or proof of profitability.
 
+Sampled and historical exits use canonical opening-gap precedence: below-stop
+opens exit at that open; above-target opens exit at the planned target. Unknown
+intrabar ordering remains stop-first. Numerical and modular forecasts honor
+`flat_by` (default 15:10, explicit maximum 15:15). Off-grid times such as 10:02
+fail. Paths, bands and outcomes share a horizon and never borrow later sampled
+time slots. No remaining horizon or an expired plan returns unavailable.
+Underlying paths can continue after a stop/target, but position P&L uses the
+first canonical exit.
+
 ## Data and execution
 
 Resolve this directory through symlinks and invoke its tool by absolute path. All original-style tools accept `--workspace DIR` (default `trader/`), `--now ISO`, `--config FILE` and relevant provider/CSV options. A naive original-style clock is IST; prefer explicit offsets. See [workflow commands and contracts](../docs/WORKFLOW.md). Use a separate workspace from sealed independent-team sessions. `run.py analyze` and `run.py evaluate` retain the existing numerical/review modes.

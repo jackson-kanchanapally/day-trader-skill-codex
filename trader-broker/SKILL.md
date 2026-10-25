@@ -14,6 +14,13 @@ python3 /absolute/path/to/trader-broker/ticket.py flatten --symbol TCS.NS --tick
 
 After actual approval, a full simulated fill requires the approved fingerprint, whole quantity, explicit price and unique fill ID. It atomically updates cash, FIFO lots and the decision log in `trader/state/paper.sqlite`; duplicate fills and stale approvals fail. Exported `portfolio.json` is not a broker account. Flatten creates a sell proposal that must pass risk and user approval. No brokerage connector or live execution is available.
 
+Buy fills also require `--fill-bar FILE`: aware observed OHLCV with
+`time,open,high,low,close,volume`. Price must match the first canonical open after
+approval and respect the limit; a signal close is not fill evidence. Closing
+sells require fresh price, valid tick/holding evidence and an open sourced
+session. A separately approved sell can close part of a position; partial
+execution fills remain unsupported.
+
 ## Data and execution
 
 Resolve this directory through symlinks and invoke its tool by absolute path. All original-style tools accept `--workspace DIR` (default `trader/`), `--now ISO`, `--config FILE` and relevant provider/CSV options. A naive original-style clock is IST; prefer explicit offsets. See [workflow commands and contracts](../docs/WORKFLOW.md). Use a separate workspace from sealed independent-team sessions. `run.py analyze` and `run.py evaluate` retain the existing numerical/review modes.

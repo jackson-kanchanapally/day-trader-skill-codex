@@ -700,7 +700,7 @@ export default function Opportunities({
           <p>
             {loading
               ? "Loading saved scanner results."
-              : "Copy a daily scan request into Codex. Every matching symbol will appear here, ranked with its source and setup evidence."}
+              : "Run a daily scan request in Codex. Every matching symbol will appear here, ranked with its source and setup evidence."}
           </p>
           {!loading && (
             <button className="primary" onClick={onCreateRequest}>

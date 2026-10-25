@@ -15,6 +15,12 @@ python3 /absolute/path/to/trader-alerts/alerts.py list
 
 Rules live in `trader/alerts.json`; deduplication is in `trader/state/alerts.json`. Each check runs once. Repeated monitoring needs an explicitly started foreground poller or external scheduler. Alerts never submit orders or send external messages automatically.
 
+`clock` and alert checks report actual `Calendar.hours`, including sourced
+exceptional windows. Next opening is null with a reason if coverage ends.
+Opening bells deduplicate per configured session event. `before_close` time
+rules retain their offset from the regular 15:30 close on exceptional sessions.
+No real special-session date is inferred.
+
 ## Data and execution
 
 Resolve this directory through symlinks and invoke its tool by absolute path. All original-style tools accept `--workspace DIR` (default `trader/`), `--now ISO`, `--config FILE` and relevant provider/CSV options. A naive original-style clock is IST; prefer explicit offsets. See [workflow commands and contracts](../docs/WORKFLOW.md). Use a separate workspace from sealed independent-team sessions. `run.py analyze` and `run.py evaluate` retain the existing numerical/review modes.

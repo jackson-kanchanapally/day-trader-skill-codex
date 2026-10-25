@@ -15,6 +15,31 @@ from .liquidity import capacity, normalize as liquidity_settings
 POLICY = 'next-available-open-v1'
 
 
+def flatten_slot(plan: dict, minutes: int = 5) -> int:
+    """Strict completed-bar boundary; never round an off-grid clock forward."""
+    at = dt.time.fromisoformat(plan.get('flat_by','15:10'))
+    offset = at.hour*60+at.minute-9*60-15
+    if at.tzinfo is not None or at.second or at.microsecond or offset % minutes:
+        raise ValueError('Flat-by must align with the candle interval')
+    if not dt.time(9,15) < at <= dt.time(15,15):
+        raise ValueError('Flat-by must follow the open and not exceed 15:15 IST')
+    return offset//minutes
+
+
+def exit_event(plan: dict, opening: float, high: float, low: float, close: float,
+               *, flatten: bool = False) -> Optional[dict]:
+    """Shared price-event rule for validated observed or generated OHLC paths."""
+    if opening <= plan['stop']:
+        return dict(exit=opening,outcome='stop')
+    if opening >= plan['target']:
+        return dict(exit=plan['target'],outcome='target')
+    if low <= plan['stop']:
+        return dict(exit=plan['stop'],outcome='stop')
+    if high >= plan['target']:
+        return dict(exit=plan['target'],outcome='target')
+    return dict(exit=close,outcome='close') if flatten else None
+
+
 def tick_price(value: float, tick: float, up: bool = False) -> float:
     if not all(math.isfinite(x) and x > 0 for x in (value, tick)):
         raise ValueError('Price and tick must be positive finite numbers')
@@ -119,21 +144,12 @@ def exit_fill(plan: dict, bar: Bar, minutes: int = 5) -> Optional[dict]:
     validate([bar])
     if bar.volume <= 0:
         raise ValueError('Cannot simulate exits on zero-volume candles')
-    price, outcome = None, None
-    if bar.open <= plan['stop']:
-        price, outcome = bar.open, 'stop'
-    elif bar.open >= plan['target']:
-        price, outcome = plan['target'], 'target'
-    elif bar.low <= plan['stop']:
-        price, outcome = plan['stop'], 'stop'
-    elif bar.high >= plan['target']:
-        price, outcome = plan['target'], 'target'
-    elif (bar.time+dt.timedelta(minutes=minutes)).time() == dt.time.fromisoformat(plan.get('flat_by', '15:10')):
-        price, outcome = bar.close, 'close'
-    if price is None:
+    flatten = (bar.time+dt.timedelta(minutes=minutes)).time() == dt.time.fromisoformat(plan.get('flat_by','15:10'))
+    event = exit_event(plan,bar.open,bar.high,bar.low,bar.close,flatten=flatten)
+    if event is None:
         return None
-    return dict(exit=price, outcome=outcome, exit_bar=bar.time.isoformat(),
-                exit_time=(bar.time+dt.timedelta(minutes=minutes)).isoformat() if outcome == 'close' else None)
+    return dict(event, exit_bar=bar.time.isoformat(),
+                exit_time=(bar.time+dt.timedelta(minutes=minutes)).isoformat() if event['outcome'] == 'close' else None)
 
 
 def replay_trade(plan: dict, future: list, capital: float, risk: float, exchange: str,

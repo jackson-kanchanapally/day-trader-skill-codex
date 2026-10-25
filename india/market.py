@@ -96,6 +96,28 @@ class Calendar:
     def trading_day(self, day, exchange='NSE'):
         return self.hours(day, exchange) is not None
 
+    def next_open(self, now, exchange='NSE'):
+        """Next future sourced session open; uncovered dates raise, never guess."""
+        now = now.astimezone(IST)
+        for offset in range(370):
+            day = now.date()+dt.timedelta(days=offset)
+            hours = self.hours(day,exchange)
+            if hours:
+                opening = dt.datetime.combine(day,hours[0],IST)
+                if opening > now:
+                    return opening
+        raise ValueError('No next opening within supplied calendar coverage')
+
+    def last_completed_session(self, now, exchange='NSE'):
+        """Expected daily close at a cutoff; missing coverage cannot be guessed."""
+        now = now.astimezone(IST)
+        for offset in range(370):
+            day = now.date()-dt.timedelta(days=offset)
+            hours = self.hours(day,exchange)
+            if hours and dt.datetime.combine(day,hours[1],IST) <= now:
+                return day
+        raise ValueError('No completed session within supplied calendar coverage')
+
     def require_strategy_session(self, day, exchange='NSE'):
         hours = self.hours(day, exchange)
         if hours and (hours[0] != dt.time(9, 15) or hours[1] < dt.time(15, 15)):
@@ -115,6 +137,13 @@ def session(t, calendar=None, exchange='NSE'):
     t = t.astimezone(IST)
     hours = (calendar or DEFAULT_CALENDAR).hours(t.date(), exchange)
     return bool(hours and hours[0] <= t.time() < hours[1])
+
+
+def daily_completed(day, as_of, calendar=None, exchange='NSE'):
+    if day != as_of.date():
+        return day < as_of.date()
+    hours = (calendar or DEFAULT_CALENDAR).hours(day,exchange)
+    return bool(hours and dt.datetime.combine(day,hours[1],IST) <= as_of)
 
 def costs(buy, sell, qty, exchange='NSE', config=None):
     if exchange not in ('NSE','BSE'):

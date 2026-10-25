@@ -826,3 +826,29 @@
     font-size: 22px;
   }
 }
+/* Direct local Codex requests, separate from specialist review artifacts. */
+.codex-run-toggle { position: fixed; bottom: 18px; right: 24px; z-index: 30; padding: 12px 18px; border: 1px solid #4c647a; border-radius: 24px; background: #22364a; color: #e5edf5; box-shadow: 0 5px 24px #0005; }
+.codex-run-panel { position: fixed; z-index: 40; right: 24px; bottom: 72px; width: min(580px, calc(100vw - 32px)); max-height: calc(100dvh - 110px); display: flex; flex-direction: column; background: #111c29; color: #e1e9f0; border: 1px solid #405469; border-radius: 16px; box-shadow: 0 16px 60px #0009; }
+.run-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px 10px; }
+.run-head h2 { margin: 5px 0; font-size: 19px; }
+.run-select { display: grid; gap: 6px; padding: 0 20px 12px; font-size: 11px; }
+.run-select select { width: 100%; min-width: 0; }
+.run-scroll { overflow-y: auto; padding: 4px 20px 20px; }
+.run-state { display: flex; align-items: center; justify-content: space-between; margin: 8px 0 16px; text-transform: capitalize; font-size: 12px; }
+.run-state b { color: #a9d4c4; }
+.run-state button, .run-actions button, .run-question button, .run-reply button { border: 1px solid #4a6177; border-radius: 7px; padding: 8px 12px; background: #24384c; color: #e3edf5; font-size: 11px; }
+.run-message { border-bottom: 1px solid #2b3b4b; padding: 12px 0; font-size: 12px; line-height: 1.65; }
+.run-message b { display: block; color: #9bb5cc; font-size: 10px; margin-bottom: 5px; }
+.run-message div { white-space: pre-wrap; overflow-wrap: anywhere; }
+.run-message pre, .run-question pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.5; max-height: 250px; overflow: auto; }
+.run-activity { padding: 14px 0; font-size: 11px; overflow-wrap: anywhere; }
+.run-activity summary { max-height: 70px; overflow: auto; cursor: pointer; color: #9cb0c2; }
+.run-activity ul { padding-left: 18px; line-height: 1.8; }
+.run-question { border: 1px solid #697052; border-radius: 10px; padding: 14px; margin: 16px 0; background: #293126; font-size: 12px; }
+.run-question label, .run-reply label { display: grid; gap: 8px; font-size: 12px; line-height: 1.6; margin: 12px 0; }
+.run-question textarea, .run-reply textarea { width: 100%; min-height: 85px; resize: vertical; padding: 10px; color: #e2ebf2; background: #0c1622; border: 1px solid #4a6073; border-radius: 7px; font: inherit; }
+.run-question select { max-width: 100%; }
+.run-actions { display: flex; gap: 8px; margin-top: 12px; }
+.run-reply { margin: 18px 0; }
+.copy-request { width: 100%; margin-top: 8px; background: transparent; border: 0; color: #9cb3c7; padding: 10px; font-size: 11px; }
+@media (max-width: 600px) { .codex-run-panel { right: 16px; bottom: 70px; } .codex-run-toggle { right: 16px; } }

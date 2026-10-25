@@ -51,7 +51,7 @@ class Forecast(unittest.TestCase):
         self.assertEqual(a['status'], 'AVAILABLE')
         self.assertFalse(a['execution_enabled'])
         self.assertEqual(a['data']['prior_complete_sessions'], 20)
-        self.assertEqual(a['mc']['bars_left'], 68)
+        self.assertEqual(a['mc']['bars_left'], 67)  # Plan flattens at 15:10, not 15:15.
         self.assertAlmostEqual(sum(a['mc'][k] for k in ('p_stop', 'p_target', 'p_neither')), 1)
         self.assertEqual(sum(a['mc']['counts'].values()), 64)
         self.assertTrue(a['mc']['costs_included'])
@@ -118,7 +118,7 @@ class Forecast(unittest.TestCase):
         # stop: preserve upstream conservative precedence but charge gap loss.
         rows = [Bar(self.now + dt.timedelta(minutes=5 * i), 98, 120, 90, 100, 1000) for i in range(72)]
         p = dict(entry=100, stop=99, target=102, qty=1, max_loss_estimate=1)
-        r = _simulate([rows], p, 71, 8, 17, 'NSE', None)
+        r = _simulate([rows], dict(p,flat_by='15:15'), 71, 8, 17, 'NSE', None)
         self.assertEqual(r['p_stop'], 1)
         self.assertEqual(r['p_target'], 0)
         self.assertLess(r['mean_net_pnl'], -2)
@@ -131,8 +131,8 @@ class Forecast(unittest.TestCase):
         # Keep quantity fixed to isolate costs rather than changed sizing.
         rows = [Bar(self.now + dt.timedelta(minutes=5 * i), 100, 100, 100, 100, 1000) for i in range(72)]
         p = dict(entry=100, stop=99, target=102, qty=1, max_loss_estimate=1)
-        low = _simulate([rows], p, 71, 8, 17, 'NSE', None)
-        high = _simulate([rows], p, 71, 8, 17, 'NSE', {'slippage_bps': 50})
+        low = _simulate([rows], dict(p,flat_by='15:15'), 71, 8, 17, 'NSE', None)
+        high = _simulate([rows], dict(p,flat_by='15:15'), 71, 8, 17, 'NSE', {'slippage_bps': 50})
         self.assertLess(high['mean_net_pnl'], low['mean_net_pnl'])
 
     def test_invalid_parameters_and_simulation_budget(self):

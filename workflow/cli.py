@@ -26,7 +26,7 @@ def parser(role):
         'entry': market | selection | set('--security-master --tick --setup --level --interval --or-minutes --min-volume-x --every --max-checks --until'.split()),
         'exit': market | set('--security-master --tick --symbol --from --stop --target --entry --or-high --or-low --date --time --flat-by --setup --interval --or-minutes'.split()),
         'timemachine': market | set('--from --replays --seed'.split()),
-        'budget': {'--from'},
+        'budget': {'--from','--limit','--prices','--portfolio'},
         'risk': market | {'--from', '--security-master', '--exchange', '--tick'},
         'broker': market | set('--security-master --exchange --tick --symbol --from --index --reply --qty --price --fingerprint --fill-id --fill-bar'.split()),
         'alerts': market | selection | set('--exchange --from --from-plan --opening-bell --above --below --stop --target --pct --direction --at --label --id --rearm --date'.split()),
@@ -75,7 +75,13 @@ def parser(role):
     add('--tickers', nargs='+')
     add('--watchlist')
     add('--universe', help='Text file, one symbol or SYMBOL|Name per line')
-    add('--limit', type=int)
+    if role == 'budget':
+        add('--limit',dest='limit_price',nargs='?',const='plan',help='Tick-aligned INR buy limit; without a value use the planned entry')
+        p.set_defaults(limit=None)
+    else:
+        add('--limit', type=int)
+    add('--prices',help='Dated completed-price JSON for conservative pre-trade sizing')
+    add('--portfolio',help='Explicit paper INR snapshot; must match the local ledger if present')
     add('--min-price', type=float, default=0)
     add('--min-volume', type=float, default=0)
     add('--setup', choices=['orb', 'level'], default='orb')
@@ -173,10 +179,19 @@ def quotes(data, names, now):
 
 
 def market_status(now, cal, exchange):
-    trading = cal.trading_day(now.date(), exchange)
+    hours = cal.hours(now.date(),exchange)
+    record = cal.document[exchange][str(now.year)]
+    following,reason = None,None
+    try:
+        following = cal.next_open(now,exchange).isoformat()
+    except ValueError as error:
+        reason = str(error)
     return dict(date=now.date().isoformat(), now_new_york=now.strftime('%Y-%m-%d %H:%M'),
-                open=session(now, cal, exchange), opens='09:15' if trading else None,
-                closes='15:30' if trading else None, early_close=None, calendar_known=True)
+                open=session(now, cal, exchange), opens=hours[0].strftime('%H:%M') if hours else None,
+                closes=hours[1].strftime('%H:%M') if hours else None, early_close=None, calendar_known=True,
+                next_open=following,next_open_reason=reason,exchange=exchange,timezone='Asia/Kolkata',
+                calendar_source=record.get('sessions',{}).get(now.date().isoformat(),record)['source'],
+                session_event=exchange+':'+now.date().isoformat()+':'+str(hours))
 
 
 def main(role, argv=None):
@@ -303,7 +318,18 @@ def run(role, a):
 
     if role == 'budget':
         require_budget(cfg)
-        doc = budget(read(a.from_path or w/'plan.json'), now, cfg)
+        paper_state = read(a.portfolio) if a.portfolio else None
+        ledger_path = w/'state/paper.sqlite'
+        if ledger_path.is_file():
+            with contextlib.closing(Ledger(ledger_path,cfg['budget'])) as ledger:
+                authoritative = ledger.portfolio()
+            if paper_state is not None and digest(paper_state) != digest(authoritative):
+                raise ValueError('Supplied portfolio differs from authoritative local paper ledger')
+            paper_state = authoritative
+        proposal = read(a.from_path or w/'plan.json')
+        limit = proposal['entry'] if a.limit_price == 'plan' else a.limit_price
+        doc = budget(proposal, now, cfg,portfolio=paper_state,
+                     prices_doc=read(a.prices) if a.prices else None,limit_price=limit)
         return output(doc, 'orders.json') if doc['orders'] else (doc, 1)
 
     if role in ('risk', 'broker'):
@@ -367,6 +393,14 @@ def run(role, a):
     if role == 'alerts':
         m = upstream('alerts', cal, a.exchange)
         status = market_status(now, cal, a.exchange)
+        def ring_time(rule, status):
+            at = dt.time.fromisoformat(rule['at'])
+            if rule.get('before_close') and status['closes']:
+                closing = dt.time.fromisoformat(status['closes'])
+                delta = dt.timedelta(minutes=closing.hour*60+closing.minute-(15*60+30))
+                at = (dt.datetime.combine(now.date(),at)+delta).time()
+            return at
+        m.ring_time = ring_time
         rules_doc = read(w/'alerts.json', {'alerts': []})
         rules = rules_doc['alerts']
         if command == 'clock':
@@ -407,6 +441,12 @@ def run(role, a):
             write(w/'alerts.json', {'alerts': rules})
             return envelope('alerts', now, added=added), 0
         state = read(w/'state/alerts.json', {})
+        if status['open']:
+            events = state.setdefault('opening_sessions',{})
+            for rule in rules:
+                if rule['type'] == 'opening_bell' and events.get(rule['id']) != status['session_event']:
+                    state.setdefault('rung',{}).pop(rule['id'],None)
+                    events[rule['id']] = status['session_event']
         if command == 'reset':
             rid = a.id or (a.items[0] if a.items else None)
             if not rid:
@@ -429,7 +469,7 @@ def run(role, a):
             if 'trader-broker flatten' in ring['message']:
                 ring['message'] = ring['message'].split(' If ')[0]+' Inspect the paper position and use ticket.py flatten with this workspace, configured capital and the verified --tick; then rerun risk and obtain user approval.'
         write(w/'state/alerts.json', updated)
-        return envelope('alerts', now, rings=indian_words(rings), errors=q['errors'],
+        return envelope('alerts', now, rings=indian_words(rings), errors=q['errors'],market=indian_words(status),
                         note='One persisted check; no notification delivery or background process implied'), int(bool(q['errors']))
 
     if role == 'news':

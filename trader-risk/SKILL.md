@@ -11,6 +11,12 @@ python3 /absolute/path/to/trader-risk/check.py --capital 100000 --risk 500 --sec
 
 Writes `trader/state/risk.json`. A missing or mismatched applicable tick blocks clearance. Public directory discovery alone is not tick verification. A PASS is a paper rules check, not a buy recommendation.
 
+Unsupported ORB sessions block buys. Closing sells use the actual sourced
+session; closed/holiday/unknown windows, stale quotes, invalid dated ticks and
+oversells still fail. Changed market observations/provenance or calendars
+invalidate an old risk decision. A query-clock change alone does not alter
+unchanged market evidence. Each closing action needs exact-ticket approval.
+
 ## Data and execution
 
 Resolve this directory through symlinks and invoke its tool by absolute path. All original-style tools accept `--workspace DIR` (default `trader/`), `--now ISO`, `--config FILE` and relevant provider/CSV options. A naive original-style clock is IST; prefer explicit offsets. See [workflow commands and contracts](../docs/WORKFLOW.md). Use a separate workspace from sealed independent-team sessions. `run.py analyze` and `run.py evaluate` retain the existing numerical/review modes.

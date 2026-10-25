@@ -13,15 +13,17 @@
     "dashboard/index.html", "dashboard/vite.config.js", "dashboard/src/*.jsx", "dashboard/src/*.css",
     "docs/GETTING_STARTED.md", "docs/WORKFLOW.md", "docs/TEAM.md",
     "docs/RESEARCH.md", "docs/RESEARCH_LAB.md", "docs/EXPERIMENTS.md", "docs/LIQUIDITY.md", "docs/REGIMES.md", "docs/DATA_SOURCES.md", "docs/OPERATIONS.md", "docs/EXECUTION.md", "docs/RELEASE.md", "docs/DASHBOARD_DATA.md",
+    "docs/UPSTREAM_PARITY_AUDIT.md", "docs/PARITY_IMPLEMENTATION_RESULTS.md",
     "scripts/build_release.py", "tests/_provider_fixtures.py", "tests/fixtures/README.md",
     ".github/workflows/tests.yml", ".github/ISSUE_TEMPLATE/*.yml", ".github/PULL_REQUEST_TEMPLATE.md"
   ],
   "tests": [
-    "tests/test_dashboard.py", "tests/test_decision_workflow.py", "tests/test_forecast.py", "tests/test_hardening.py",
+    "tests/test_dashboard.py", "tests/test_dashboard_runner.py", "tests/test_decision_workflow.py", "tests/test_forecast.py", "tests/test_hardening.py",
     "tests/test_india.py", "tests/test_nse.py", "tests/test_opportunities.py", "tests/test_repo.py", "tests/test_release.py",
     "tests/test_research_store.py", "tests/test_research_lab.py", "tests/test_research_strategies.py", "tests/test_research_regimes.py",
     "tests/test_execution_golden.py", "tests/test_execution_policy.py", "tests/test_volume_calendar.py", "tests/test_liquidity.py",
-    "tests/test_team.py", "tests/test_upstox.py", "tests/test_workflow.py", "tests/test_yahoo.py"
+    "tests/test_team.py", "tests/test_upstox.py", "tests/test_workflow.py", "tests/test_yahoo.py",
+    "tests/test_parity_forecast.py", "tests/test_parity_sessions.py", "tests/test_parity_scanner.py", "tests/test_parity_budget.py", "tests/test_parity_contracts.py"
   ],
   "synthetic_fixtures": [
     "tests/fixtures/india/synthetic.csv",

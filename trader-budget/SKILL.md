@@ -11,6 +11,15 @@ python3 /absolute/path/to/trader-budget/size.py --capital 100000 --risk 500 --wr
 
 Writes `trader/orders.json` with `--write`. The simulated bracket describes intended levels; no broker holds protective legs. Defaults are examples, not evidence of the user's actual budget.
 
+Use `--limit PRICE` for a tick-aligned INR buy limit, or `--limit` without a
+value for the planned entry. A limit below market is never an assumed fill.
+`--prices FILE` supplies dated completed-price JSON; requested stale/future or
+missing quotes fail. `--portfolio FILE` supplies an explicit paper INR snapshot.
+An existing workspace ledger is authoritative; a different snapshot fails.
+Without either, configured capital is explicitly an estimate. Cash, held
+exposure, costs and the conservative price bound size the fixed whole quantity.
+Later exact-order risk, user approval and observed-fill checks remain mandatory.
+
 ## Data and execution
 
 Resolve this directory through symlinks and invoke its tool by absolute path. All original-style tools accept `--workspace DIR` (default `trader/`), `--now ISO`, `--config FILE` and relevant provider/CSV options. A naive original-style clock is IST; prefer explicit offsets. See [workflow commands and contracts](../docs/WORKFLOW.md). Use a separate workspace from sealed independent-team sessions. `run.py analyze` and `run.py evaluate` retain the existing numerical/review modes.

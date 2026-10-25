@@ -8,6 +8,7 @@ import Opportunities from "./Opportunities";
 import "./theme.css";
 import "./workflow.css";
 import RequestDialog from "./RequestDialog";
+import RunPanel, { useCodexRunner } from "./RunPanel";
 import Research from "./Research";
 import Journal from "./Journal";
 
@@ -209,6 +210,7 @@ function Chart({ candles, vwap }) {
 }
 
 function App() {
+  const runner = useCodexRunner();
   const [reviewSeed, setReviewSeed] = useState(null),
     [requestKey, setRequestKey] = useState(0),
     [researchTarget, setResearchTarget] = useState(""),
@@ -996,7 +998,10 @@ function App() {
         setMode={setRequestMode}
         seed={reviewSeed}
         requestKey={requestKey}
+        runner={runner}
       />
+      <button className="codex-run-toggle" onClick={() => runner.setOpen(!runner.open)}>Codex{runner.connection?.active_id ? " · Active request" : " · Requests"}</button>
+      <RunPanel runner={runner} />
     </div>
   );
 }

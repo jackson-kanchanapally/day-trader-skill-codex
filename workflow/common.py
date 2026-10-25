@@ -105,8 +105,8 @@ def config(path=None, **overrides):
         if isinstance(c[key], bool) or int(c[key]) != c[key] or c[key] < 1:
             raise ValueError(key+' must be a positive integer')
     times = [dt.time.fromisoformat(c[k]) for k in ('no_entries_before', 'no_entries_after', 'flat_by')]
-    if not dt.time(9, 15) <= times[0] < times[1] < times[2] < dt.time(15, 15):
-        raise ValueError('Require 09:15 <= entry start < entry cutoff < flat-by < 15:15 IST')
+    if not dt.time(9, 15) <= times[0] < times[1] < times[2] <= dt.time(15, 15):
+        raise ValueError('Require 09:15 <= entry start < entry cutoff < flat-by <= 15:15 IST')
     return c
 
 

@@ -1,6 +1,6 @@
 # React agent observatory
 
-Read-only, local dashboard for saved daily market scans and actual Codex trading-team sessions. React and Vite build the frontend; a Python standard-library HTTP server reads existing handoffs and reviews. No cloud account, AI API key or frontend subscription is required.
+Local dashboard for saved daily market scans, research and actual Codex trading-team sessions. React and Vite build the frontend; a Python standard-library HTTP server reads existing handoffs and reviews. Viewing saved results requires no AI account. Direct requests use an installed, signed-in Codex CLI and its configured model/account.
 
 From the repository root, using Node 20.19+ or 22.12+ and Python 3.9+:
 
@@ -16,7 +16,19 @@ Open **http://127.0.0.1:8765**. The server binds only to loopback. Stop it with 
 python3 -m dashboard --workspace trader --sessions trader/team --port 8766
 ```
 
-Run `$trader-team` in Codex while the page is open. “New request” builds a request to copy into Codex: choose “Review one stock”, “Discover NSE universe”, or “Scan NSE opportunities”. Universe discovery saves the eligible NSE symbol list; the opportunities request refreshes that list and runs a daily setup scan across it without a symbol limit, reporting coverage and failures. Saved daily matches appear in Opportunities; start a stock review afterward to follow the independent team in Observatory. The browser itself does not launch agents. The latest session is followed automatically, or select an archived session and turn off “Follow latest”. Empty workspaces display setup instructions rather than fake data.
+Choose **New request**, fill in the research/scan/trade-planning form, then click **Run in Codex**. The local server starts a Codex conversation through [Codex app-server](https://learn.chatgpt.com/docs/app-server). The **Codex · Requests** panel shows streamed replies and recent activity, lets you answer questions and individual tool-permission requests, and provides **Stop request**. Follow-up messages continue the same conversation. Copy request remains available as a fallback. No model turn starts merely by opening or refreshing the dashboard.
+
+Only one request runs at a time against the mutable workspace. Universe discovery saves the eligible NSE symbol list; the opportunities request refreshes that list and runs a daily setup scan across it without a symbol limit, reporting coverage and failures. Saved daily matches appear in Opportunities; research saves to Individual research. Observatory continues to read actual independent specialist files and lifecycle events. A completed Codex turn is not independent trade clearance. Empty workspaces show setup instructions rather than fake data.
+
+If `codex` is not on the server's PATH, specify the executable:
+
+```sh
+python3 -m dashboard --codex-bin /absolute/path/to/codex
+```
+
+Sign in using your local Codex installation first. The dashboard never receives an API key or auth token. It inherits the configured model; no model is hardcoded. Requests run with workspace-write sandboxing, restricted shell network access and on-request tool approvals, subject to local managed policy. The browser cannot send arbitrary app-server RPC or select executables/working directories. Command/file approvals are one-time decisions for exact native requests; unsupported request types fail closed. All runs are research/proposal only: there are no dashboard order, simulated approval or fill endpoints.
+
+Run transcripts are private runtime records under `--workspace/dashboard-runs/`, separate from team reviews and the paper ledger. Restarting the server marks unfinished saved requests interrupted; it never fabricates running/completed specialist events. You can send a follow-up to resume a saved Codex thread. Preserve original cutoff/hash and missing-evidence checks when continuing a review. The server closes its Codex connection on shutdown.
 
 ## Market opportunities
 
@@ -69,8 +81,14 @@ listing metadata remain ignored runtime files, outside public source releases.
 
 The HTTP API provides `/api/opportunities` and
 `/api/opportunities/SYMBOL?scan=SCAN_ID`. The detail API rejects unknown symbols
-and changed scan IDs; all endpoints remain loopback-only and read-only.
+and changed scan IDs; these evidence endpoints remain loopback-only and read-only.
 Opportunities refresh from saved files every ten seconds, not from a live feed.
+
+Direct requests use `GET /api/runner`, `GET /api/runs/ID`, `POST /api/runs`,
+and `POST /api/runs/ID/{reply,answer,stop}`. Writes require the dashboard's
+same-origin request and per-server token; cross-origin and rebinding requests
+are rejected. Run controls use the production Python URL above. In Vite
+development, cross-origin POST requests are intentionally rejected.
 
 ## Independent team
 
@@ -90,4 +108,4 @@ The coordinator lifecycle command is documented in `trader-team/references/workf
 
 The dashboard shows candles within the configured 09:15–15:15 strategy window, distinguishes numerical artifacts from model verdicts, and hides outdated report clearance after reviews/settings/evidence change. It verifies archived files against the engine without rewriting them. A connection error shows a cached-data warning. A 2-second polling connection is not a live-price feed. Financial/source strings render as text; research links allow HTTPS only.
 
-For frontend development, keep the Python server on port 8765 and run `npm run dev --prefix dashboard` in a second terminal. Vite proxies `/api` to Python. Production uses the single Python URL above. Tests: `python3 -m unittest discover -s tests -p test_dashboard.py` and `python3 -m unittest discover -s tests -p test_opportunities.py`.
+For frontend development, keep the Python server on port 8765 and run `npm run dev --prefix dashboard` in a second terminal. Vite proxies evidence `/api` reads to Python. Production uses the single Python URL above. Tests: `python3 -m unittest discover -s tests -p 'test_dashboard*.py'` and `python3 -m unittest discover -s tests -p test_opportunities.py`.

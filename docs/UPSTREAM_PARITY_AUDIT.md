@@ -1,5 +1,33 @@
 # Upstream feature parity audit
 
+## Implementation update — 2026-10-26
+
+The original audit and Appendix B below are retained as historical pre-fix
+evidence. Current implementation evidence is in
+[PARITY_IMPLEMENTATION_RESULTS.md](PARITY_IMPLEMENTATION_RESULTS.md).
+The original observational probes for fixed defects are expected to stop
+passing; use active `tests/test_parity_*.py` acceptance regressions instead.
+
+| Gap | Current status | Compatibility implication |
+| --- | --- | --- |
+| G01 | Fixed | Sampled and historical exits share canonical event precedence and cost tests |
+| G02 | Fixed | Numerical, modular and sealed default forecasts honor plan flattening; strict off-grid rejection |
+| G03 | Fixed | Sourced-session closing sells retain price/tick/holding/approval gates |
+| G04 | Fixed | Actual calendar clocks, next opening and per-session bell deduplication |
+| G05 | Fixed | Stale daily histories excluded from current hits; historical as-of retained |
+| G06 | Fixed | Optional quote/cash/exposure context and tick-aligned INR limit proposals |
+| G07 | Deferred | Per-symbol fetching; no new full-market coverage claim |
+| G08 | Deferred | No simulated-clock watch replay yet |
+| G09 | Deferred | Cross-story merge/issuer attribution remains incomplete |
+| G10 | Deferred | Financial extraction/expansion remains incomplete |
+| G11 | Deferred | Dated-source reconciliation and observed liquidity validation remain incomplete |
+| G12 | Deferred | Forward-paper/persisted promotion evidence remains incomplete |
+| G13 | Deferred | Optional compatibility scope still needs decisions/implementations |
+| G14 | Partial | Phase-one instructions, help contracts and public packaging updated |
+
+Active feature parity remains **PARTIAL**. Broker transport, shorts, margin and
+unsupported instruments remain intentionally disabled.
+
 ## Finding and scope
 
 **Active NSE/BSE feature parity is PARTIAL.** All eleven original Python

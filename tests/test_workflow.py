@@ -90,12 +90,16 @@ class Workflow(unittest.TestCase):
 
     def test_daily_setups_reuse_original_rules(self):
         bars = []
-        day = dt.date(2026, 7, 1)
-        while len(bars) < 40:
+        # Setup arithmetic is tested on current complete sessions. Stale
+        # histories now have separate rejection regressions in parity_scanner.
+        dates,day = [],NOW.date()-dt.timedelta(days=1)
+        while len(dates) < 40:
             if DEFAULT_CALENDAR.trading_day(day):
-                price = 100+len(bars)
-                bars.append(Bar(dt.datetime.combine(day, dt.time(9, 15), IST), price, price+1, price-1, price, 1000))
-            day += dt.timedelta(days=1)
+                dates.append(day)
+            day -= dt.timedelta(days=1)
+        for day in reversed(dates):
+            price = 100+len(bars)
+            bars.append(Bar(dt.datetime.combine(day, dt.time(9, 15), IST), price, price+1, price-1, price, 1000))
         class Data:
             source = 'synthetic test'
             def history(self, symbol, interval):

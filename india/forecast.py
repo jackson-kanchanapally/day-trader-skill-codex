@@ -15,6 +15,7 @@ from dataclasses import replace
 from .analysis import backtest, size, ANALYSIS_END
 from .data import IST, symbol_name, timestamp, validate
 from .market import costs, session
+from .execution import exit_event, flatten_slot
 
 MIN_SESSIONS = 20
 MAX_SIMS = 50000
@@ -35,29 +36,31 @@ def _positive(value):
 def _simulate(days, plan, first_slot, sims, seed, exchange, config):
     # Whole observed candles preserve within-bar OHLC relationships. Draw from
     # the same time of day +/- two bars, as in the upstream Time Machine.
-    pool = [[] for _ in range(SESSION_BARS)]
+    until = flatten_slot(plan)
+    if not 1 <= first_slot < until <= SESSION_BARS:
+        raise ValueError('No remaining completed-bar simulation horizon')
+    pool = [[] for _ in range(until)]
     for rows in days:
-        for i in range(1, SESSION_BARS):
+        for i in range(1, until):
             previous = rows[i - 1].close
             b = rows[i]
             pool[i].append(tuple(x / previous for x in (b.open, b.high, b.low, b.close)))
     rng = random.Random(seed)
     entry, stop, target, qty = (plan[k] for k in ('entry', 'stop', 'target', 'qty'))
     counts = dict.fromkeys(('target', 'stop', 'close'), 0)
-    terminal, pnls, path_columns = [], [], [[] for _ in range(SESSION_BARS - first_slot + 1)]
+    terminal, pnls, path_columns = [], [], [[] for _ in range(until - first_slot + 1)]
     sample_paths = []
     for n in range(sims):
         price, outcome, exit_price = entry, None, None
         path = [entry]
-        for i in range(first_slot, SESSION_BARS):
-            slot = min(SESSION_BARS - 1, max(1, i + rng.randint(-2, 2)))
+        for i in range(first_slot, until):
+            slot = min(until - 1, max(1, i + rng.randint(-2, 2)))
             o, h, lo, c = rng.choice(pool[slot])
             opening, high, low, closing = (price * x for x in (o, h, lo, c))
             if outcome is None:
-                if low <= stop:
-                    outcome, exit_price = 'stop', min(opening, stop)
-                elif high >= target:
-                    outcome, exit_price = 'target', target
+                event = exit_event(plan,opening,high,low,closing,flatten=i == until-1)
+                if event:
+                    outcome,exit_price = event['outcome'],event['exit']
             price = closing
             path.append(price)
         outcome = outcome or 'close'
@@ -75,7 +78,7 @@ def _simulate(days, plan, first_slot, sims, seed, exchange, config):
     return {
         'status': 'AVAILABLE', 'kind': 'SIMULATED_PATHS_NOT_OBSERVED_PRICES',
         'replays': sims, 'seed': seed, 'window': 2,
-        'bars_left': SESSION_BARS - first_slot, 'until': '15:15',
+        'bars_left': until - first_slot, 'until': plan.get('flat_by','15:10'),
         'pool_sessions': len(days), 'counts': counts,
         'p_target': counts['target'] / sims, 'p_stop': counts['stop'] / sims,
         'p_neither': counts['close'] / sims, 'p_green': sum(x > 0 for x in pnls) / sims,
@@ -178,7 +181,8 @@ def forecast(bars, as_of, plan, symbol, tick, capital, risk, rr=2., config=None,
                        pool_to=full[-1][0].isoformat() if full else None)
     doc['mc']['sample_sessions'] = len(full)
     if full:
-        history = backtest([b for _, rows in full for b in rows], symbol, tick, capital, risk, rr, config, calendar)
+        history = backtest([b for _, rows in full for b in rows], symbol, tick, capital, risk, rr, config, calendar,
+                           flat_by=plan.get('flat_by','15:10') if isinstance(plan,dict) else '15:10')
         doc['history'] = dict(history, status='AVAILABLE', sessions=len(full),
                               triggered=len(history['trades']), costs_included=True,
                               entry_rule='next-bar open', current_session_excluded=True)
@@ -196,6 +200,7 @@ def forecast(bars, as_of, plan, symbol, tick, capital, risk, rr=2., config=None,
     if not plan.get('signal_time'):
         raise ValueError('plan requires signal_time for causal validation')
     signal = timestamp(plan['signal_time'])
+    until = flatten_slot(plan)
     if signal + STEP > as_of:
         return unavailable('SIGNAL_NOT_COMPLETED')
     if signal.date() != as_of.date() or signal != usable[-1].time:
@@ -204,13 +209,13 @@ def forecast(bars, as_of, plan, symbol, tick, capital, risk, rr=2., config=None,
         return unavailable('OUTSIDE_STRATEGY_WINDOW')
     opening = as_of.replace(hour=9, minute=15, second=0, microsecond=0)
     first_slot = int((as_of - opening).total_seconds() // 300)
-    if first_slot < 1 or first_slot >= SESSION_BARS:
+    if first_slot < 1 or first_slot >= until:
         return unavailable('NO_REMAINING_BARS')
     today = grouped.get(as_of.date(), [])
     if [b.time for b in today] != [opening + STEP * i for i in range(first_slot)]:
         return unavailable('INCOMPLETE_CURRENT_SESSION')
     scenario_start = opening + STEP * first_slot
-    doc['plan'] = size(dict({k: plan[k] for k in ('entry', 'stop', 'target', 'signal_time')}, tick=tick),
+    doc['plan'] = size(dict({k: plan[k] for k in ('entry', 'stop', 'target', 'signal_time')}, tick=tick,flat_by=plan.get('flat_by','15:10')),
                        capital, risk, exchange, config)
     if not doc['plan']['qty'] or doc['plan']['net_reward_risk'] < 1:
         return unavailable('COST_OR_RISK_LIMIT')
