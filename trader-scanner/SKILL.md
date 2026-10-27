@@ -3,7 +3,7 @@ name: trader-scanner
 description: Discover and scan NSE/BSE stocks for original daily setups and completed-bar opening-range breakouts.
 ---
 
-Scan Indian stocks using the original daily setup rules and completed-bar opening-range workflow. Use `scan.py universe` to discover cash equities from a public Upstox instrument directory or supplied security master, then `daily` or `orb` for the user's universe/watchlist. Preserve failed symbols and report data coverage. Daily setups include 20-session breakouts, bull flags, MA20 reclaims, oversold and oversold bounces.
+Scan Indian stocks using the original daily setup rules and completed-bar opening-range workflow. Use `scan.py universe` to discover NSE EQ-series stocks from official NSE equity and ETF lists by default, or a supplied instrument/security master, then `daily` or `orb` for the user's universe/watchlist. Preserve failed symbols and report data coverage. Daily setups include 20-session breakouts, bull flags, MA20 reclaims, oversold and oversold bounces.
 
 ```sh
 python3 /absolute/path/to/trader-scanner/scan.py universe --exchange NSE
@@ -11,14 +11,24 @@ python3 /absolute/path/to/trader-scanner/scan.py daily --symbols TCS.NS,RELIANCE
 python3 /absolute/path/to/trader-scanner/scan.py orb --symbols TCS.NS --provider upstox --tick 0.05
 ```
 
-Scans write `trader/watchlist.json` by default. Use `--no-write` for a preview; `--limit N` bounds a broad scan. The directory does not verify tick units or guarantee candle availability.
+Scans write `trader/watchlist.json` and dated `scans/` evidence by default. Daily scans also preserve `daily-watchlist.json` and cached matching candles for dashboard charts. With no explicit selection, scan the saved universe or discover one; an old watchlist must not narrow a market scan. Use `--no-write` for a preview; `--limit N` bounds a broad scan. The directory does not verify tick units or guarantee candle availability.
 
 Daily matches require the expected last completed session at the supplied
 calendar/cutoff. Today's incomplete daily candle is excluded before close and
 may be used after the actual close. Old histories are `STALE`, excluded from
 current hits. Inspect `stale`, `unavailable`, `failed` and per-symbol status.
-Historical `--now` scans use their historical expected session. Batching and
-two-stage confirmation remain deferred; this is still a per-symbol fetch loop.
+Historical `--now` scans use their historical expected session. Yahoo screening uses batches of up to 20 (`--batch-size`), followed by full OHLCV confirmation with bounded `--workers` (1..8, default 4). A failed/incomplete summary falls back to full data; close-only summaries never become invented candles. Incomplete Yahoo candles try whole alternate-host/range snapshots and complete five-minute aggregation from five observed minute bars; remaining gaps stay unavailable. ORB `--max-confirm N` exposes every skipped candidate; no cap applies by default. `--eligible-only` excludes expired triggers, while `eligible_hits` always separates fresh entries. Nested ORB workspaces publish hash-bound dashboard archives; supplied directory metadata is not verified execution eligibility.
+
+CLI volume confirmation defaults to the original opening-range average. Use `--volume-basis same-time` explicitly for prior-session RVOL; it requires historical samples. Refresh entries after a long scan before planning a trade.
+
+For dashboard scans, put the separate ORB workspace under the selected dashboard
+workspace, for example `trader/scan-runs/RUN/orb`. The CLI captures the daily
+selection/hash before fetching; a changed daily source rejects publication
+while retaining the archived scan and `publication.json` receipt. Already fetched
+full ORB candles are compressed under `candles/` and hashed in `evidence.json`;
+summary-only rows have no invented OHLCV. Failed rows retain provider attempts
+and missing candle times. Report requested = scanned + failed + unavailable +
+stale + skipped; confirmation caps must not count a skipped stock as scanned.
 
 ## Data and execution
 

@@ -20,6 +20,8 @@ Without either, configured capital is explicitly an estimate. Cash, held
 exposure, costs and the conservative price bound size the fixed whole quantity.
 Later exact-order risk, user approval and observed-fill checks remain mandatory.
 
+Weighted INR allocation is available with `--weights SYMBOL.NS=60,OTHER.NS=40` or `--targets FILE`, dated `--prices FILE`, and optional `--top N`/`--portfolio FILE`. It retains normalization, blocked symbols, cap redistribution, whole shares, fees and idle cash. The output is `allocation.json`, not a ready intraday order: each selected stock still needs its own dated entry, stop/target, tick and exact-order risk check.
+
 ## Data and execution
 
 Resolve this directory through symlinks and invoke its tool by absolute path. All original-style tools accept `--workspace DIR` (default `trader/`), `--now ISO`, `--config FILE` and relevant provider/CSV options. A naive original-style clock is IST; prefer explicit offsets. See [workflow commands and contracts](../docs/WORKFLOW.md). Use a separate workspace from sealed independent-team sessions. `run.py analyze` and `run.py evaluate` retain the existing numerical/review modes.

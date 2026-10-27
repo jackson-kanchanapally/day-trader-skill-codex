@@ -323,6 +323,46 @@ function OpportunityDetail({ selected, scan, onClose, onPrepare, onResearch }) {
             onResearch={research}
             onPrepare={prepare}
           />
+          <section className="op-detail-section">
+            <div className="op-section-heading">
+              <span className="eyebrow">SEPARATE INTRADAY CHECK</span>
+              <h3>Five-minute opening range</h3>
+            </div>
+            <p>
+              <b>{detail.entry?.status?.replaceAll("_", " ") || "NOT CHECKED"}</b>
+              {detail.entry?.cutoff && ` · checked ${day(detail.entry.cutoff)} ${clock(detail.entry.cutoff)}`}
+            </p>
+            {detail.entry?.opening_range && (
+              <p>Range high {money(detail.entry.opening_range.high)} · low {money(detail.entry.opening_range.low)}
+                {detail.entry.trigger && ` · trigger ${money(detail.entry.trigger.price)}`}</p>
+            )}
+            {detail.entry?.signal_confirmed_at && (
+              <p>Confirmed {clock(detail.entry.signal_confirmed_at)} · entry expires {clock(detail.entry.expires_at)}.
+                Eligibility is checked again against the current clock.</p>
+            )}
+            {detail.entry?.previous_trigger && (
+              <p>Earlier saved breakout confirmed {clock(detail.entry.previous_trigger.signal_confirmed_at)}
+                {` and expired ${clock(detail.entry.previous_trigger.expires_at)}`}.
+                The later refresh has unavailable candle data.</p>
+            )}
+            {detail.entry?.reason && <p className="micro">{detail.entry.reason}</p>}
+            {(detail.entry?.missing_bars?.length > 0 || detail.entry?.provider_attempts?.length > 0) && (
+              <details>
+                <summary>Intraday data coverage</summary>
+                {detail.entry.missing_bars?.length > 0 && (
+                  <p>Missing completed candles: {detail.entry.missing_bars.map(clock).join(", ")}.</p>
+                )}
+                <ul>
+                  {(detail.entry.provider_attempts || []).map((attempt, i) => (
+                    <li key={i}>{attempt.provider}: {attempt.usable ? "complete strategy window" : "unavailable or incomplete"}
+                      {attempt.error && ` · ${attempt.error}`}
+                      {Number.isFinite(attempt.missing_strategy_bars) && ` · ${attempt.missing_strategy_bars} missing strategy bars`}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </section>
           <div className="op-detail-grid">
             <div className="op-detail-main">
               <section className="op-detail-chart">
@@ -599,7 +639,10 @@ export default function Opportunities({
         (reviewFilter === "all" ||
           (reviewFilter === "cautions" && row.flags?.length) ||
           (reviewFilter === "research" && row.research_count > 0) ||
-          (reviewFilter === "stale" && row.data_status !== "CURRENT_DAILY")),
+          (reviewFilter === "stale" && row.data_status !== "CURRENT_DAILY") ||
+          (reviewFilter === "entry" && row.entry?.status === "ELIGIBLE") ||
+          (reviewFilter === "triggered" && ["ELIGIBLE", "EXPIRED", "NOT_ELIGIBLE"].includes(row.entry?.status)) ||
+          (reviewFilter === "unavailable" && ["UNAVAILABLE", "FAILED", "STALE"].includes(row.entry?.status))),
     );
     return matches.sort((a, b) =>
       sort === "volume"
@@ -633,6 +676,9 @@ export default function Opportunities({
         "Approx turnover INR",
         "Candle date",
         "Data status",
+        "ORB status now",
+        "ORB checked at",
+        "Entry expires at",
         "Tradeability",
         "Research cautions",
         "Saved research records",
@@ -649,6 +695,9 @@ export default function Opportunities({
         r.turnover,
         r.as_of.slice(0, 10),
         r.data_status,
+        r.entry?.status,
+        r.entry?.cutoff,
+        r.entry?.expires_at,
         r.tradeability,
         (r.flags || []).map((f) => f.label).join("; "),
         r.research_count,
@@ -733,8 +782,20 @@ export default function Opportunities({
               [
                 "Failed symbols",
                 numeric(scan.failed),
-                "Insufficient or unavailable data",
+                "Provider or validation errors",
                 "◌",
+              ],
+              [
+                "Unavailable history",
+                numeric(scan.coverage?.unavailable || 0),
+                `${numeric(scan.coverage?.stale || 0)} stale · ${numeric(scan.coverage?.skipped || 0)} skipped`,
+                "◫",
+              ],
+              [
+                "Fresh ORB entries",
+                numeric(scan.intraday?.eligible_now || 0),
+                `${numeric(scan.intraday?.covered || 0)} matches have saved intraday checks`,
+                "◷",
               ],
             ].map(([label, value, note, icon], i) => (
               <div className={`op-summary-card op-summary-${i}`} key={label}>
@@ -756,6 +817,21 @@ export default function Opportunities({
               Cutoff {day(scan.as_of)} · {clock(scan.as_of)}
             </span>
             <span>Saved results · refresh every 10s</span>
+          </div>
+          <div className="market-readiness-banner">
+            <span className="decision-pill caution">ORB · {scan.intraday?.scope?.replaceAll("_", " ") || "none"}</span>
+            <div>
+              <b>Daily matches and fresh entries are separate.</b>
+              <p>
+                Full shortlist: {numeric(scan.intraday?.full_shortlist?.requested || 0)} requested,
+                {" "}{numeric(scan.intraday?.full_shortlist?.scanned || 0)} scanned,
+                {" "}{numeric(scan.intraday?.full_shortlist?.failed || 0)} failed,
+                {" "}{numeric(scan.intraday?.full_shortlist?.skipped || 0)} skipped.
+                {scan.intraday?.full_shortlist?.as_of && ` Cutoff ${day(scan.intraday.full_shortlist.as_of)} ${clock(scan.intraday.full_shortlist.as_of)}.`}
+                {scan.intraday?.scope === "subset" && ` Latest subset refresh: ${numeric(scan.intraday.requested)} requested at ${clock(scan.intraday.as_of)}.`}
+                {" "}{numeric(scan.intraday?.eligible_now || 0)} entries remain eligible at the displayed clock; exact order risk is separate.
+              </p>
+            </div>
           </div>
           <div className="market-readiness-banner">
             <span className="decision-pill caution">
@@ -846,6 +922,9 @@ export default function Opportunities({
                 <option value="cautions">With research cautions</option>
                 <option value="research">With saved research</option>
                 <option value="stale">Daily refresh required</option>
+                <option value="entry">Fresh ORB entry</option>
+                <option value="triggered">ORB triggered or expired</option>
+                <option value="unavailable">ORB data unavailable</option>
               </select>
             </label>
             <label className="op-sort">
@@ -901,6 +980,7 @@ export default function Opportunities({
                     <th scope="col">Company / listing</th>
                     <th scope="col">Strength</th>
                     <th scope="col">Matched setups</th>
+                    <th scope="col">ORB entry</th>
                     <th scope="col">Last close</th>
                     <th scope="col">Rel. volume</th>
                     <th scope="col" className="op-hide-medium">
@@ -973,6 +1053,7 @@ export default function Opportunities({
                       <td className="op-setups-cell">
                         <Tags tags={row.setups} />
                       </td>
+                      <td>{row.entry?.status?.replaceAll("_", " ") || "NOT CHECKED"}</td>
                       <td className="op-price-cell">{money(row.price)}</td>
                       <td
                         className={`op-volume-cell ${row.volume_x >= 1.5 ? "positive" : ""}`}
@@ -1062,12 +1143,13 @@ export default function Opportunities({
           <details className="op-failures">
             <summary>
               <span>
-                Coverage exceptions <b>{scan.failed}</b>
+                Coverage exceptions <b>{scan.universe - scan.scanned}</b>
               </span>
-              <span>View every failed symbol ↓</span>
+              <span>View every unavailable or skipped symbol ↓</span>
             </summary>
             <p>
-              {scan.failed} symbols could not be evaluated. Setup counts can
+              {scan.failed} failed, {scan.coverage?.unavailable || 0} unavailable,
+              {" "}{scan.coverage?.stale || 0} stale and {scan.coverage?.skipped || 0} skipped. Setup counts can
               overlap because one symbol may match multiple rules.
             </p>
             <div className="op-table-scroll">
@@ -1075,14 +1157,16 @@ export default function Opportunities({
                 <thead>
                   <tr>
                     <th>Symbol</th>
+                    <th>Status</th>
                     <th>Reason</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {scan.failures.map((row) => (
+                  {(scan.coverage_exceptions || scan.failures).map((row) => (
                     <tr key={row.symbol}>
                       <td>{row.symbol}</td>
-                      <td>{row.error}</td>
+                      <td>{(row.status || "FAILED").replaceAll("_", " ")}</td>
+                      <td>{row.error || row.reason}</td>
                     </tr>
                   ))}
                 </tbody>

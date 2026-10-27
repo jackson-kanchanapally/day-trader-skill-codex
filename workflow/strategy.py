@@ -30,7 +30,8 @@ def regular(bars, now, interval, calendar, exchange):
 
 
 def entry(bars, symbol, now, cfg, setup='orb', level=None, interval='5m', or_minutes=15,
-          min_volume_x=None, calendar=None, source='caller-supplied', tick=None, master=None):
+          min_volume_x=None, calendar=None, source='caller-supplied', tick=None, master=None,
+          volume_basis='same-time'):
     cal, exchange = calendar or DEFAULT_CALENDAR, exchange_of(symbol)
     if interval not in ('1m', '5m'):
         raise ValueError('Entry requires 1m or 5m bars')
@@ -40,6 +41,8 @@ def entry(bars, symbol, now, cfg, setup='orb', level=None, interval='5m', or_min
         number(level, 'level')
     if min_volume_x is not None:
         number(min_volume_x, 'min_volume_x')
+    if volume_basis not in ('same-time', 'opening-range'):
+        raise ValueError('volume-basis must be opening-range or same-time')
     cal.trading_day(now.date(), exchange)
     rows, missing = regular(bars, now, interval, cal, exchange)
     m = upstream('entry', cal, exchange)
@@ -52,9 +55,13 @@ def entry(bars, symbol, now, cfg, setup='orb', level=None, interval='5m', or_min
     evaluation_cfg = dict(cfg)
     while True:
         result = m.evaluate(chart, utc(now), setup=setup, level=level, interval=interval,
-                            or_minutes=or_minutes, min_volume_x=None, cfg=evaluation_cfg)
+                            or_minutes=or_minutes, min_volume_x=min_volume_x if volume_basis == 'opening-range' else None, cfg=evaluation_cfg)
         trig = result.get('trigger')
         if not trig:
+            break
+        if volume_basis == 'opening-range':
+            trig['relative_volume'] = dict(value=trig.get('volume_x'), mode='opening_range_average',
+                                          current_volume=trig.get('volume'), baseline_volume=result['opening_range'].get('avg_volume'))
             break
         cutoff = dt.datetime.combine(now.date(), dt.time.fromisoformat(trig['close_time']), IST)
         rvol = relative_volume(completed_history, as_of=cutoff, **volume_args)
@@ -66,6 +73,7 @@ def entry(bars, symbol, now, cfg, setup='orb', level=None, interval='5m', or_min
         # Search subsequent confirmations without changing any market data.
         evaluation_cfg['no_entries_before'] = (cutoff+dt.timedelta(minutes=1)).strftime('%H:%M')
     result['min_volume_x'] = min_volume_x
+    result['volume_basis'] = volume_basis
     result['no_entries_before'] = cfg['no_entries_before']
     if excluded_volume and not result.get('trigger'):
         result['reason'] = 'No breakout met prior-session time-of-day RVOL requirements'
@@ -99,14 +107,66 @@ def entry(bars, symbol, now, cfg, setup='orb', level=None, interval='5m', or_min
     return indian_words(doc)
 
 
-def scan(data, symbols, now, cfg, mode='orb', calendar=None, min_price=0, min_volume=0, **kwargs):
+def scan(data, symbols, now, cfg, mode='orb', calendar=None, min_price=0, min_volume=0,
+         workers=4, max_confirm=None, eligible_only=False, batch_size=20, use_summaries=True, **kwargs):
     cal = calendar or DEFAULT_CALENDAR
     hits, failed, checked, stale, unavailable = [], [], [], [], []
     m = upstream('scanner', cal)
+    symbols = list(dict.fromkeys(symbols))
+    if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 8:
+        raise ValueError('workers must be 1..8')
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or not 1 <= batch_size <= 20:
+        raise ValueError('batch-size must be 1..20')
+    if max_confirm is not None and (isinstance(max_confirm, bool) or not isinstance(max_confirm, int) or max_confirm < 1):
+        raise ValueError('max-confirm must be a positive integer')
+    if use_summaries and getattr(data, 'provider', None) == 'yahoo' and not data.csv_path:
+        from .scanning import batch_scan
+        return batch_scan(data, symbols, now, cfg, mode, cal, min_price, min_volume,
+                          workers, max_confirm, eligible_only, batch_size, kwargs)
+    if hasattr(data, 'prefetch'):
+        data.prefetch(symbols, '1d' if mode == 'daily' else '5m', workers,
+                      current_only=mode == 'orb' and kwargs.get('min_volume_x') is None)
+    stage, skipped, candidates = {}, [], []
+    if mode == 'orb':
+        minutes = kwargs.get('or_minutes', 15)
+        if minutes < 5 or minutes > 120 or minutes % 5:
+            raise ValueError('Opening range must be a multiple of 5 from 5..120 minutes')
+        n = minutes//5
+        for symbol in symbols:
+            try:
+                bars = data.history(symbol, '5m')
+                source = data.source
+                rows, missing = regular(bars, now, '5m', cal, exchange_of(symbol))
+                if missing:
+                    stage[symbol] = dict(error='Missing required session candles', missing_bars=missing,
+                                         source=source)
+                    raise ValueError('Missing required session candles')
+                turnover = sum(b.close*b.volume for b in rows)
+                candidate = len(rows) > n and any(b.close >= max(r.close for r in rows[:n]) for b in rows[n:])
+                liquid = bool(rows and rows[-1].close >= min_price and sum(b.volume for b in rows) >= min_volume)
+                stage[symbol] = dict(bars=bars, source=source, turnover=turnover, candidate=candidate and liquid)
+                if candidate and liquid:
+                    candidates.append(symbol)
+            except (ValueError, OSError, KeyError, TypeError, IndexError) as exc:
+                stage.setdefault(symbol, dict(error=str(exc)))
+        candidates.sort(key=lambda s: (-stage[s]['turnover'], s))
+        skipped = candidates[max_confirm:] if max_confirm else []
+    selected = set(candidates)-set(skipped)
     for symbol in symbols:
         try:
             exchange = exchange_of(symbol)
-            bars = data.history(symbol, '1d' if mode == 'daily' else '5m')
+            if mode == 'orb':
+                first = stage[symbol]
+                if 'error' in first:
+                    raise ValueError(first['error'])
+                if symbol not in selected:
+                    checked.append(dict(symbol=symbol, status='SKIPPED_CONFIRMATION_CAP' if symbol in skipped else 'NO_CANDIDATE',
+                                        source=first['source'], eligible=False, turnover_inr=first['turnover']))
+                    continue
+                bars = first['bars']
+                data.source = first['source']
+            else:
+                bars = data.history(symbol, '1d')
             if mode == 'daily':
                 expected = cal.last_completed_session(now,exchange)
                 if any(b.time.date() > now.date() for b in bars):
@@ -140,17 +200,33 @@ def scan(data, symbols, now, cfg, mode='orb', calendar=None, min_price=0, min_vo
                 checked.append(item)
                 if item['status'] == 'no-data':
                     raise ValueError(item['reason'])
-                if item['status'] == 'triggered' and item['price'] >= min_price and sum(b.volume for b in bars if b.time.date() == now.date()) >= min_volume:
+                if item['status'] == 'triggered' and (not eligible_only or item['eligible']) and item['price'] >= min_price and sum(b.volume for b in bars if b.time.date() == now.date()) >= min_volume:
                     hits.append(dict(symbol=symbol, setups=['orb'], **{k: v for k, v in item.items() if k != 'symbol'}))
         except (ValueError, OSError, KeyError, TypeError, IndexError) as exc:
-            failed.append({'symbol': symbol, 'error': str(exc)})
+            interval = '1d' if mode == 'daily' else '5m'
+            diagnostic = dict(symbol=symbol, error=str(exc),
+                              provider_attempts=getattr(data, 'attempts', {}).get((symbol, interval), []))
+            if mode == 'orb' and stage.get(symbol, {}).get('missing_bars'):
+                diagnostic['missing_bars'] = stage[symbol]['missing_bars']
+                diagnostic['source'] = stage[symbol]['source']
+            failed.append(diagnostic)
             if mode == 'daily':
                 checked.append(dict(symbol=symbol,status='FAILED',reason=str(exc)))
     used_sources = sorted({row['source'] for row in checked if row.get('source')})
+    hits.sort(key=lambda r: (-(r['price']*r['volume'] if mode == 'daily' else stage[r['symbol']]['turnover']), r['symbol']))
+    scanned = len(symbols)-len(failed)-len(stale)-len(unavailable)-len(skipped)
+    counts = dict(requested=len(symbols), scanned=scanned, fetched=len(symbols)-len(failed), failed=len(failed),
+                  stale=len(stale), unavailable=len(unavailable), candidates=len(candidates),
+                  confirmed=sum(r.get('status') == 'triggered' for r in checked),
+                  skipped=len(skipped), eligible=sum(bool(r.get('eligible')) for r in checked), hits=len(hits))
     return envelope('scanner', now, mode=mode, as_of=now.isoformat(), source=used_sources[0] if len(used_sources) == 1 else 'See per-symbol sources',
-                    universe=len(symbols), scanned=len(symbols)-len(failed)-len(stale)-len(unavailable), failed=failed,
+                    universe=len(symbols), scanned=scanned, failed=failed,
                     stale=stale,unavailable=unavailable,
-                    hits=hits, results=checked)
+                    hits=hits, results=checked, counts=counts,
+                    skipped=[dict(symbol=s, reason='confirmation cap') for s in skipped],
+                    fetch=getattr(data, 'fetch_metrics', {}),
+                    eligible_hits=[r for r in hits if r.get('eligible')],
+                    note='Historical trigger hits are separate from current eligible entries; confirmation caps leave explicit unreviewed candidates.')
 
 
 def rounded(value, tick, direction=ROUND_HALF_UP):
@@ -211,7 +287,8 @@ def plan(info, now, tick, cfg, stop=None, target='2R', bars=None, calendar=None,
                     entry=e, entry_time=confirmation.strftime('%H:%M') if confirmation else None,
                     signal_time=signal.isoformat() if signal else None,
                     entry_bar=info.get('bar_index'), interval=info.get('interval', '5m'),
-                    opening_range=opening_range or None, level=info.get('level'), min_volume_x=info.get('min_volume_x'), stop=float(computed['stop']),
+                    opening_range=opening_range or None, level=info.get('level'), min_volume_x=info.get('min_volume_x'),
+                    volume_basis=info.get('volume_basis', 'same-time'), stop=float(computed['stop']),
                     stop_rule=stop_rule, stop_spec=stop, stop_label=computed['stop_label'],
                     target=target_price, target_spec=target, target_r=(target_price-e)/risk_per_share,
                     risk_per_share=risk_per_share, reward_risk=(target_price-e)/risk_per_share,
@@ -236,7 +313,8 @@ def historical_replay(days, current_plan, cfg, calendar=None):
             now = rows[index].time+dt.timedelta(minutes=5)
             candidate = entry(prior+rows[:index+1], symbol, now, cfg, setup=current_plan['setup'],
                               level=current_plan.get('level'), or_minutes=(current_plan.get('opening_range') or {}).get('minutes', 15),
-                              min_volume_x=current_plan.get('min_volume_x'), calendar=calendar)
+                              min_volume_x=current_plan.get('min_volume_x'), calendar=calendar,
+                              volume_basis=current_plan.get('volume_basis', 'same-time'))
             if not candidate['eligible']:
                 continue
             p = plan(candidate, now, tick, cfg, current_plan['stop_spec'], current_plan['target_spec'],
@@ -252,11 +330,13 @@ def historical_replay(days, current_plan, cfg, calendar=None):
                 net_pnl=sum(t['net_pnl'] for t in trades), costs_included=True, entry_rule='next-bar open')
 
 
-def timemachine(bars, p, now, cfg, calendar=None, sims=10000, seed=19):
+def timemachine(bars, p, now, cfg, calendar=None, sims=10000, seed=19, window=2):
     if not isinstance(sims, int) or isinstance(sims, bool) or not 1 <= sims <= MAX_SIMS:
         raise ValueError('Replays must be 1..'+str(MAX_SIMS))
     if p.get('interval') != '5m':
         raise ValueError('Time Machine requires five-minute candles')
+    if isinstance(window, bool) or not isinstance(window, int) or not 0 <= window <= 10:
+        raise ValueError('window must be an integer from 0..10 bars')
     from collections import defaultdict
     cal, symbol = calendar or DEFAULT_CALENDAR, p['symbol']
     cutoff = clock(p['as_of'])
@@ -302,6 +382,7 @@ def timemachine(bars, p, now, cfg, calendar=None, sims=10000, seed=19):
     if not 1 <= slot < until <= 72:
         doc['reason'] = 'OUTSIDE_HOLDING_WINDOW'
         return doc
-    mc = _simulate([rows for _, rows in days], sized, slot, sims, seed, exchange_of(symbol), cfg.get('costs'))
-    doc.update(status='AVAILABLE', reason=None, mc=mc)
+    mc = _simulate([rows for _, rows in days], sized, slot, sims, seed, exchange_of(symbol), cfg.get('costs'), window)
+    m = upstream('timemachine', cal, exchange_of(symbol))
+    doc.update(status='AVAILABLE', reason=None, mc=mc, verdict=m.verdict(mc), verdict_notes=m.verdict_notes(mc))
     return doc

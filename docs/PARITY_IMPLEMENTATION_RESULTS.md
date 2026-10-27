@@ -1,3 +1,116 @@
+# Current workflow restoration — 2026-10-26
+
+The product defaults to the original modular Indian skill chain. The dashboard
+now makes independent reviews opt-in, uses saved configuration plus explicit
+account overrides, and preserves daily shortlist/chart evidence across ORB
+scans. Full command behavior and permanent market/transport differences are
+in [the compatibility contract](ORIGINAL_WORKFLOW.md).
+
+| Area | Active restoration | Acceptance evidence |
+| --- | --- | --- |
+| G07 | Yahoo 20-symbol close batches, same-window daily confirmation, bounded chart fetching, two-stage ORB, optional confirmation caps, per-symbol accounting, known product exclusions | BroadScanner tests: 43/500 names, batch boundaries, outages, source cache/concurrency, exact frozen evaluator comparisons, saved-universe default |
+| G08 | Simulated-clock CSV watches, initial/latest and new-bar events, bounded read recovery, cutoff/expiry/check limit, fresh-trigger auto-write and explicit no-write | Watcher tests and full CLI handoff |
+| G09 | Transitive ID/link/title-day merge, persisted aliases, NSE/BSE/issuer attribution, repeated feeds, dated sources/errors | NewsParity tests, existing source-cutoff regressions |
+| G10 | Directory/companies import discovery, batches, units/basis, QoQ/YoY/margins, revisions, YTD/Q4 derivation, explicit comparable TTM EPS, newer-filing/result-age warnings; bounded official NSE integrated-index/RSS/XBRL source collection | FinancialParity and OfficialFacts tests; index is bounded and older archive coverage can be incomplete |
+| G13 | Resampling window/until, histogram and original verdict/notes; INR weights/top/caps/whole-share costs/idle cash | OtherCompatibility tests; allocation is research until individual trade plans pass risk |
+| G14 | Matching skill/CLI docs, original workflow default and opt-in independent UI, compatible public export | Existing contract/export tests and new active regression module |
+
+## Live gap closure and display binding, 26 October 2026
+
+- Default NSE universe discovery now reads NSE's current EQ-series list and
+  removes symbols in its ETF list. A read-only check returned 2,360 normal EQ
+  single-share symbols; LIQUIDADD was excluded. The prior 2,665-symbol Upstox
+  audit is kept unchanged as historical evidence.
+- Incomplete Yahoo five-minute snapshots try the alternate host and bounded
+  range, then five-minute candles assembled only from five consecutive observed
+  minute bars. Provider/range/missing-bar attempts are recorded. A five-stock
+  real sample that failed earlier still had 1–9 missing five-minute bars at
+  13:00 IST; those entries remain unavailable. Recovery never fills absent bars.
+- Nested ORB scan archives are bound by SHA-256 to the exact saved daily scan.
+  The dashboard combines the last full-shortlist scan with later subset checks
+  and recomputes entry expiry at display time. The earlier 2,665-symbol run is
+  archived. The latest official-stock run requested 2,360 daily names, scanned
+  2,318, failed 2, left 40 with insufficient history, skipped none, and found
+  807 daily matches at 13:23:11 IST. Its full ORB pass requested 807, scanned
+  447, failed 360, skipped none, recorded 371 earlier breakouts and one entry
+  eligible at its 13:25:37 cutoff. SADHNANIQ confirmed at 13:25 and expired
+  at 13:30. A 14:36:46 subset refresh failed on missing candles, so the
+  dashboard shows the expired prior trigger, the newer data failure and zero
+  current eligible entries. The exact files are in
+  `trader/scan-runs/NSE-20261026-official-EQ/`.
+- The analyst fetched an official current NSE integrated XBRL for BFUTILITIE
+  at 13:00 IST. The standalone 2026-03-31 quarter was sourced, hashed and
+  reported stale; the consolidated basis remained unavailable for that filing.
+  The paginated index returned seven TCS consolidated quarters through
+  2026-09-30 and a sourced revenue/profit TTM. The news tool
+  attributed that filing from the official feed. The index is bounded and RSS
+  feeds have short current windows; an unlimited company-facts archive,
+  PDF-only facts and guaranteed current data coverage are not implied.
+- The text Time Machine chart and shortened-session alert option are exposed
+  through the modular CLI. The dashboard build, local API and synthetic
+  recovery/source/expiry tests passed. The historical phase-one matrix below
+  records its earlier checkpoint; current validation was 679 tests (676 pass,
+  three sandbox socket skips), public export 378 tests (375 pass, three socket
+  skips), and separate loopback dashboard suites passed 30/30.
+
+The earlier G01–G06 fixes remain intact. All eleven archived source utilities
+remain unchanged. No broker transport, permission bypass or fabricated data was
+added. G11 external rule/data authentication and G12 forward promotion are
+separate validation/platform work; neither is silently counted as original
+workflow completion.
+
+## Follow-up correctness verification — 26 October 2026
+
+- Capped ORB candidates no longer count as scanned. Both direct and batched
+  paths reconcile requested = scanned + failed + unavailable + stale + skipped;
+  `counts.scanned` matches the top-level field. Failure rows retain provider
+  attempts and exact missing strategy candle timestamps.
+- Daily source selection and SHA-256 are captured once before ORB fetching.
+  A daily-file replacement during fetching retains the original scan archive
+  and records `SOURCE_CHANGED` in `publication.json`; it never binds that
+  result to the replacement shortlist. Captured full OHLCV is compressed and
+  hashed in `evidence.json` without refetching or creating summary-only candles.
+- Prefetch fallback reuses the existing Yahoo attempt. Current-session NSE
+  fallback requests one day, while historical RVOL keeps its necessary history.
+- XBRL parsing resolves actual currency and per-share unit declarations and
+  namespaces, following the [XBRL unit contract](https://specifications.xbrl.org/reporting-requirements.html).
+  Wrong-currency labels, duplicate contexts and conflicting same-time quarters
+  fail explicitly. Invalid optional EPS retains a field reason. Newer unreadable
+  indexed results remain visible as stale-result warnings; a later revision
+  cannot enter a past cutoff through an older RSS publication. Cache scope is
+  one invocation. NSE news timestamps remain IST when the caller uses UTC.
+- The dashboard displays every coverage category and reason. Its live API
+  verified the saved 13:23:11 daily scan: 2,360 requested, 2,318 scanned,
+  2 failed, 40 unavailable, zero stale/skipped and 807 matches. The page exposes
+  all 42 exceptions. Planning uses saved capital/risk unless explicitly
+  overridden; missing choices are obtained before sizing. Repeated failed
+  ORB refreshes preserve the prior expired trigger as history.
+
+Acceptance: 690 repository tests completed (687 pass, three sandbox socket
+skips); clean public export 389 tests (386 pass, three socket skips); separate
+dashboard loopback suites 31/31 passed. The React build and public manifest
+check passed (210 source files, 29 test modules), as did `git diff --check`.
+The stricter read-only TCS CLI returned four displayed consolidated quarters
+through 2026-09-30 with zero acquisition errors. This pass did not rerun the
+market universe scan or approve/place an order. Archived original utilities
+remain unchanged.
+
+A seven-stock read-only Yahoo scan at 11:41 IST fetched all seven without
+errors (one summary request, four chart workers, 1.28 seconds observed), found
+six historical triggers, and returned zero fresh eligible entries. This is a
+sample validation, not a full-universe latency or profitability claim.
+
+The new active regression module includes a synthetic scan → news → analyst →
+watch → midpoint exit → scenarios → sizing → risk PASS → paper-ticket display
+→ alert-rule handoff, with twenty complete prior sessions. It approves no
+paper fill and makes no live order. Synthetic 500-symbol batching is checked
+separately from the real-provider sample.
+
+The phase-one report below is preserved as historical implementation evidence.
+Its deferred status rows describe that earlier stopping point.
+
+---
+
 # Parity implementation results — Phase 1, 2026-10-26
 
 G01–G06 are implemented in the active Indian runtime. This run stops at the

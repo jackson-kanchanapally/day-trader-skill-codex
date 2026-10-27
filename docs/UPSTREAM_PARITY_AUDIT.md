@@ -1,6 +1,17 @@
 # Upstream feature parity audit
 
-## Implementation update — 2026-10-26
+## Current workflow update — 2026-10-26
+
+The active original-workflow restoration is documented in
+[ORIGINAL_WORKFLOW.md](ORIGINAL_WORKFLOW.md). G07 scanning, G08 watching and
+G09 story merging now have active implementations and regressions. G10 financial
+imports include bounded official NSE integrated-index/RSS/XBRL acquisition;
+older archive coverage remains a source limitation. G13 controls/allocation
+are expanded; external broker receipts remain an integration boundary. G14
+commands/instructions/packaging are updated. The phase-one matrix below is
+historical and is not the current status of those added features.
+
+## Phase-one implementation update — 2026-10-26
 
 The original audit and Appendix B below are retained as historical pre-fix
 evidence. Current implementation evidence is in

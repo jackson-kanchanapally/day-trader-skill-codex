@@ -18,7 +18,7 @@ python3 -m dashboard --workspace trader --sessions trader/team --port 8766
 
 Choose **New request**, fill in the research/scan/trade-planning form, then click **Run in Codex**. The local server starts a Codex conversation through [Codex app-server](https://learn.chatgpt.com/docs/app-server). The **Codex · Requests** panel shows streamed replies and recent activity, lets you answer questions and individual tool-permission requests, and provides **Stop request**. Follow-up messages continue the same conversation. Copy request remains available as a fallback. No model turn starts merely by opening or refreshing the dashboard.
 
-Only one request runs at a time against the mutable workspace. Universe discovery saves the eligible NSE symbol list; the opportunities request refreshes that list and runs a daily setup scan across it without a symbol limit, reporting coverage and failures. Saved daily matches appear in Opportunities; research saves to Individual research. Observatory continues to read actual independent specialist files and lifecycle events. A completed Codex turn is not independent trade clearance. Empty workspaces show setup instructions rather than fake data.
+Only one request runs at a time against the mutable workspace. Universe discovery saves the eligible NSE symbol list; the opportunities request refreshes that list and runs a daily setup scan across it without a symbol limit, reporting coverage and failures, then checks fresh ORB entries on the shortlist. Saved daily matches appear in Opportunities; research saves to Individual research. Observatory continues to read actual independent specialist files and lifecycle events. A completed Codex turn is not independent trade clearance. Empty workspaces show setup instructions rather than fake data.
 
 If `codex` is not on the server's PATH, specify the executable:
 
@@ -39,7 +39,9 @@ setup, sort, paginate through all results or export the filtered/all-match CSV.
 No symbol limit is applied by the dashboard. Switching to Observatory preserves
 the existing independent-team view; mobile has a view selector in the header.
 
-Company details separate setup strength, current tradeability and independent risk.
+Ordinary requests follow the original modular skills. **Add independent specialist reviews** is unchecked by default; it opts into the separate frozen team engine. Saved configuration and explicit overrides drive planning, and capital-based sizing remains labelled as an estimate when cash is unverified.
+
+Company details separate setup strength, ORB entry status, current tradeability and exact-order risk.
 Daily freshness uses the current clock and covered calendar, while explicit flags
 show extension, unusual volume and volatility. Missing spread, price-band or halt
 evidence remains unavailable. Stock research starts with a symbol; bare NSE codes
@@ -70,13 +72,16 @@ saved run under `trader/scans/*/` with `candles/SYMBOL.json` enables a daily
 close/MA20/volume chart and recent OHLCV table. The report hash, cutoff, symbol,
 source, latest candle and recomputed indicator evidence must match. Missing or
 inconsistent history displays stored indicators without inventing a chart.
-The page does not fetch prices, perform issuer research or clear downstream
-entry/tick/risk checks.
+The page reads hash-bound saved ORB snapshots for the exact daily scan, reports
+full-shortlist and subset-refresh coverage, and recalculates entry expiry at
+display time. It does not fetch prices, perform issuer research or clear
+downstream tick/exact-order risk checks.
 
 Listing names are optional local metadata in `trader/instrument-names.json`, with
 shape `{"source":"source URL","fetched_at":"ISO timestamp","names":{"DEMO.NS":"Example listing name"}}`.
 Use a permitted instrument directory for real names; symbols are the fallback.
-The current EQ universe can include ETFs. Market reports, candle snapshots and
+Older Upstox-discovered universes can include ETFs; the default NSE refresh now
+uses the official EQ-series and ETF lists. Market reports, candle snapshots and
 listing metadata remain ignored runtime files, outside public source releases.
 
 The HTTP API provides `/api/opportunities` and

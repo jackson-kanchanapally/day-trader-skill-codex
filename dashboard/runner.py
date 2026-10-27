@@ -253,7 +253,7 @@ class CodexRunner:
                     'You are serving a local Indian equity research dashboard. '
                     'Follow the explicitly invoked trader skill and its prerequisites. '
                     f'Use the mutable workspace {self.workspace} and independent session root {self.sessions}. '
-                    'Preserve requested cutoffs and source hashes. Ask for missing user/account choices before sizing. '
+                    'Preserve requested cutoffs and source hashes. Use the original modular skill workflow by default; independent review is opt-in. Use saved configuration and explicit overrides, obtain missing capital/risk choices, and label provisional capital-based sizing when cash is unverified. '
                     'Native specialist contexts are required for independent review; deterministic CLI output is not an agent. '
                     'Record lifecycle events only after real native events. Save unavailable research visibly. '
                     'Dashboard requests authorize research and proposals only. Never invoke paper-ticket approve/fill '

@@ -144,6 +144,17 @@ class Opportunities(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'coverage counts'):
             self.store.listing()
 
+    def test_daily_coverage_lists_insufficient_history_separately_from_failures(self):
+        self.doc['results'].extend([
+            dict(symbol='SHORT.NS', status='UNAVAILABLE', reason='Fewer than 30 sessions'),
+            dict(symbol='STALE.NS', status='STALE', reason='Latest session missing'),
+        ])
+        self.doc['universe'] += 2
+        self.save()
+        result = self.store.listing()
+        self.assertEqual(result['coverage'], dict(requested=6, scanned=3, failed=1, unavailable=1, stale=1, skipped=0))
+        self.assertEqual({row['symbol'] for row in result['coverage_exceptions']}, {'SHORT.NS','STALE.NS','MISSING.NS'})
+
     def test_workspace_and_snapshot_symlink_escape_is_rejected(self):
         path = self.snapshot()
         with tempfile.TemporaryDirectory() as other:
@@ -184,7 +195,7 @@ class Opportunities(unittest.TestCase):
             caught.exception.close()
         with self.assertRaises(urllib.error.HTTPError) as caught:
             urllib.request.urlopen(urllib.request.Request(base+'/api/opportunities', data=b'{}', method='POST'))
-        self.assertEqual(caught.exception.code, 501)
+        self.assertEqual(caught.exception.code, 403)
         caught.exception.close()
 
 

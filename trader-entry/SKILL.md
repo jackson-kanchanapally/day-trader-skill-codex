@@ -11,7 +11,7 @@ python3 /absolute/path/to/trader-entry/entry.py check TCS.NS --setup level --lev
 python3 /absolute/path/to/trader-entry/entry.py watch TCS.NS --every 30 --max-checks 120 --write
 ```
 
-Writes `trader/entry.json` with `--write`. Watch is a foreground poll loop with a check limit, not a background service.
+Checks write `trader/entry.json` with `--write`. As in the original, a watch automatically saves a fresh eligible trigger; `--no-write` disables that write. Use `--csv FILE --now ISO` (or explicit `--replay`) for simulated-clock replay without real sleeps. Emit the initial latest completed bar, then one event per newly completed bar. Retry transient reads up to `--max-errors` consecutive failures; stop on cutoff, expiry, interrupt or `--max-checks`. The watcher never approves or fills tickets. CLI `--min-volume-x` uses the original opening-range average by default; `--volume-basis same-time` selects the historical RVOL alternative.
 
 ## Data and execution
 

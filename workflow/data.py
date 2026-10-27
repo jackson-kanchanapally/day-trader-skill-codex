@@ -2,7 +2,10 @@
 import csv
 import datetime as dt
 import gzip
+import io
 import json
+import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import time
 import urllib.error
@@ -17,11 +20,33 @@ from india.security import security_master, verify_tick
 
 
 def universe(exchange, instruments=None):
-    """Read Upstox's public BOD directory without an account or price requests.
+    """Read NSE's official EQ list or a supplied/Upstox public directory.
 
     Tick values are deliberately not normalized here: raw instrument masters
     do not substitute for dated, explicitly INR-denominated tick evidence.
     """
+    if exchange == 'NSE' and not instruments:
+        equity_url = 'https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv'
+        etf_url = 'https://nsearchives.nseindia.com/content/equities/eq_etfseclist.csv'
+        def listing(url):
+            request = urllib.request.Request(url, headers={'User-Agent': 'IndianTradingResearch/1.0'})
+            with urllib.request.urlopen(request, timeout=20) as response:
+                if urllib.parse.urlsplit(response.url).hostname != 'nsearchives.nseindia.com':
+                    raise ValueError('NSE security directory redirected away from NSE')
+                raw = response.read(2_000_001)
+            if len(raw) > 2_000_000:
+                raise ValueError('NSE security directory exceeds 2 MB')
+            return list(csv.DictReader(io.StringIO(raw.decode('utf-8-sig'))))
+        equity, etfs = listing(equity_url), listing(etf_url)
+        if not equity or not etfs or not {'SYMBOL', ' SERIES', ' MARKET LOT'} <= set(equity[0]) or 'Symbol' not in etfs[0]:
+            raise ValueError('Official NSE equity/ETF directory schema is unavailable')
+        funds = {r['Symbol'].strip() for r in etfs}
+        names = {symbol_name(r['SYMBOL'].strip()+'.NS') for r in equity
+                 if r[' SERIES'].strip() == 'EQ' and r[' MARKET LOT'].strip() == '1'
+                 and r['SYMBOL'].strip() not in funds}
+        if len(names) < 1000:
+            raise ValueError('Official NSE EQ directory unexpectedly short')
+        return sorted(names), equity_url+'; ETF exclusion: '+etf_url
     url = 'https://assets.upstox.com/market-quote/instruments/exchange/'+exchange+'.json.gz'
     if instruments:
         raw = Path(instruments).read_bytes()
@@ -32,6 +57,11 @@ def universe(exchange, instruments=None):
     names = set()
     for row in rows:
         if row.get('segment') != exchange+'_EQ' or row.get('instrument_type') != 'EQ' or row.get('lot_size') != 1 or row.get('security_type', 'NORMAL') != 'NORMAL':
+            continue
+        product = ' '.join(str(row.get(k, '')) for k in ('name', 'trading_symbol', 'instrument_type'))
+        if (any(row.get(k) is True for k in ('is_sme', 'is_suspended', 'suspended'))
+                or row.get('series', 'EQ') not in ('EQ', 'A', 'B')
+                or re.search(r'\b(ETF|ETN|REIT|INVIT|warrants?|debentures?|bonds?)\b|BEES\b|exchange.traded|mutual fund', product, re.I)):
             continue
         name = row.get('trading_symbol') if exchange == 'NSE' else str(row.get('exchange_token', ''))
         if name:
@@ -48,6 +78,10 @@ class MarketData:
         self.as_of, self.provider, self.csv_path = as_of, provider, csv_path
         self.days, self.instruments = days, instruments
         self._rows, self._cache = None, {}
+        self._errors = {}
+        self.fetch_metrics = {}
+        self.intraday_range = None
+        self._retrieval_attempts = []
         self._last_request = None
         self._nse, self._upstox = None, None
         self.auto_fallback, self.calendar = auto_fallback, calendar or DEFAULT_CALENDAR
@@ -59,6 +93,8 @@ class MarketData:
         if interval not in ('1m', '5m', '1d'):
             raise ValueError('Supported intervals: 1m, 5m, 1d')
         key = symbol, interval
+        if key in self._errors:
+            raise ValueError(self._errors[key])
         if key in self._cache:
             self.source = self.sources[key]
             return self._cache[key]
@@ -92,6 +128,78 @@ class MarketData:
         self.sources[key] = self.source
         return self._cache[key]
 
+    def prefetch(self, symbols, interval='5m', workers=4, current_only=False):
+        """Bounded shared fetching, one immutable snapshot per symbol.
+
+        Only Yahoo chart reads run concurrently. NSE and entitled broker sources
+        retain serial access and their existing directory/session cache. No
+        candles from different requests/providers are joined.
+        """
+        if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 8:
+            raise ValueError('workers must be 1..8')
+        names = list(dict.fromkeys(symbols))
+        pending = [s for s in names if (s, interval) not in self._cache and (s, interval) not in self._errors]
+        started = time.monotonic()
+        concurrent = self.provider == 'yahoo' and not self.csv_path
+        # A fallback adapter may have its own session and access constraints;
+        # do not silently parallelize those requests.
+        def fetch(symbol):
+            child = MarketData(self.as_of, self.provider, self.csv_path, self.days,
+                               self.instruments, False, self.calendar)
+            child.intraday_range = '1d' if current_only else self.intraday_range
+            try:
+                rows = child.history(symbol, interval)
+                return symbol, rows, child.source, child.attempts, None
+            except (ValueError, OSError, KeyError, TypeError, IndexError) as error:
+                return symbol, None, child.source, child.attempts, str(error)
+        if concurrent:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                fetched = list(pool.map(fetch, pending))
+            for symbol, rows, source, attempts, error in fetched:
+                self.attempts.update(attempts)
+                if error:
+                    self._errors[(symbol, interval)] = error
+                else:
+                    self._cache[(symbol, interval)] = rows
+                    self.sources[(symbol, interval)] = source
+            # Fallback access remains serial. Replace the entire failed/gapped
+            # snapshot through the ordinary provider-selection boundary.
+            if self.auto_fallback:
+                for symbol, rows, _, _, error in fetched:
+                    if symbol.endswith('.NS') and (error or not self._coverage(rows, symbol, interval)[0]):
+                        key = symbol, interval
+                        self._cache.pop(key, None)
+                        self._errors.pop(key, None)
+                        try:
+                            if self._last_request is not None:
+                                time.sleep(max(0, .3-(time.monotonic()-self._last_request)))
+                            self._last_request = time.monotonic()
+                            # Reuse the completed Yahoo attempt and try only
+                            # the serial fallback, replacing the whole snapshot.
+                            recovered = self._online_snapshot(symbol, interval,
+                                primary=(rows, self.attempts.get(key, [])), current_only=current_only)
+                            self._cache[key] = recovered
+                            self.sources[key] = self.source
+                        except (ValueError, OSError, KeyError, TypeError, IndexError) as exc:
+                            self._errors[key] = str(exc)
+        else:
+            previous_range = self.intraday_range
+            if current_only:
+                self.intraday_range = '1d'
+            try:
+                for symbol in pending:
+                    try:
+                        self.history(symbol, interval)
+                    except (ValueError, OSError, KeyError, TypeError, IndexError) as error:
+                        self._errors[(symbol, interval)] = str(error)
+            finally:
+                self.intraday_range = previous_range
+        self.fetch_metrics = dict(requested=len(names), uncached=len(pending),
+                                  workers=workers if concurrent else 1,
+                                  elapsed_seconds=round(time.monotonic()-started, 4),
+                                  method='bounded Yahoo chart reads' if concurrent else 'serial source/cache reads')
+        return self.fetch_metrics
+
     def _coverage(self, bars, symbol, interval):
         if interval == '1d':
             return True, 0
@@ -109,19 +217,28 @@ class MarketData:
             return False, missing+10000
         return missing == 0, missing
 
-    def _online_snapshot(self, symbol, interval):
+    def _online_snapshot(self, symbol, interval, primary=None, current_only=False):
         candidates = [self.provider]
         if self.provider == 'yahoo' and symbol.endswith('.NS') and interval in ('5m', '1d') and self.auto_fallback:
             candidates.append('nse')
         attempts, best = [], None
+        if primary is not None:
+            rows, previous_attempts = primary
+            attempts = list(previous_attempts)
+            candidates = [name for name in candidates if name != self.provider]
+            if rows:
+                usable, missing = self._coverage(rows, symbol, interval)
+                best = ((usable, -missing, len(rows)), rows, self.provider)
         labels = {'yahoo': 'Yahoo unofficial; may be delayed', 'nse': 'NSE experimental website adapter; provider terms apply', 'upstox': 'Upstox V3'}
         for name in candidates:
             try:
                 if name == 'yahoo':
+                    self._retrieval_attempts = []
                     rows = self._yahoo(symbol, interval)
                 elif name == 'nse':
-                    if self._nse is None:
-                        self._nse = NSEProvider(self.as_of, min(self.days, 120))
+                    source_days = 1 if interval == '5m' and (current_only or self.intraday_range == '1d') else min(self.days, 120)
+                    if self._nse is None or self._nse.days != source_days:
+                        self._nse = NSEProvider(self.as_of, source_days)
                     rows = self._nse.history(symbol, interval)
                 else:
                     if self._upstox is None:
@@ -130,14 +247,16 @@ class MarketData:
                 step = dt.timedelta(minutes=1 if interval == '1m' else 5)
                 rows = validate([b for b in rows if (daily_completed(b.time.date(),self.as_of,self.calendar,'NSE' if symbol.endswith('.NS') else 'BSE') if interval == '1d' else b.time+step <= self.as_of)])
                 usable, missing = self._coverage(rows, symbol, interval)
-                attempts.append(dict(provider=name, usable=usable, missing_strategy_bars=missing))
+                attempts.append(dict(provider=name, usable=usable, missing_strategy_bars=missing,
+                                     retrievals=list(self._retrieval_attempts) if name == 'yahoo' else []))
                 score = usable, -missing, len(rows)
                 if best is None or score > best[0]:
                     best = score, rows, name
                 if usable:
                     break
             except (ValueError, OSError, KeyError, TypeError, IndexError) as exc:
-                attempts.append(dict(provider=name, usable=False, error=str(exc)))
+                attempts.append(dict(provider=name, usable=False, error=str(exc),
+                                     retrievals=list(self._retrieval_attempts) if name == 'yahoo' else []))
         self.attempts[(symbol, interval)] = attempts
         if best is None:
             raise ValueError('; '.join(item['provider']+': '+item.get('error', 'incomplete') for item in attempts))
@@ -146,26 +265,63 @@ class MarketData:
         return rows
 
     def _yahoo(self, symbol, interval):
-        rng = '1y' if interval == '1d' else ('7d' if interval == '1m' else '60d')
-        path = '/v8/finance/chart/'+urllib.parse.quote(symbol)+'?'+urllib.parse.urlencode(dict(range=rng, interval=interval))
-        errors = []
-        for host in ('query2', 'query1'):
-            for attempt in range(2):
-                try:
-                    req = urllib.request.Request('https://'+host+'.finance.yahoo.com'+path, headers={'User-Agent': 'Mozilla/5.0'})
-                    with urllib.request.urlopen(req, timeout=20) as response:
-                        return parse_yahoo(json.load(response), symbol, interval, self.as_of,self.calendar)
-                except (ValueError, KeyError, TypeError, IndexError, OSError) as exc:
-                    errors.append(str(exc))
-                    if isinstance(exc, urllib.error.HTTPError):
-                        code = exc.code
-                        if exc.fp is not None:
-                            exc.close()
-                        if code == 429 and attempt == 0:
-                            time.sleep(1)
-                            continue
-                    break
-        raise ValueError('Yahoo unavailable/incomplete: '+'; '.join(errors)+'; use an authorized CSV/API source')
+        rng = '3mo' if interval == '1d' else ('7d' if interval == '1m' else self.intraday_range or '60d')
+        requests = [(interval, rng)]
+        if interval == '5m' and rng == '1d':
+            requests.append(('5m', '5d'))
+            requests.append(('1m', '1d'))
+        best = None
+        for request_interval, request_range in requests:
+            path = '/v8/finance/chart/'+urllib.parse.quote(symbol)+'?'+urllib.parse.urlencode(dict(range=request_range, interval=request_interval))
+            for host in ('query2', 'query1'):
+                for retry in range(2):
+                    try:
+                        req = urllib.request.Request('https://'+host+'.finance.yahoo.com'+path, headers={'User-Agent': 'Mozilla/5.0'})
+                        with urllib.request.urlopen(req, timeout=20) as response:
+                            rows = parse_yahoo(json.load(response), symbol, request_interval, self.as_of, self.calendar)
+                        if request_interval == '1m':
+                            rows = aggregate_minutes(rows)
+                        usable, missing = self._coverage(rows, symbol, interval)
+                        self._retrieval_attempts.append(dict(host=host, interval=request_interval, range=request_range,
+                                                             usable=usable, missing_strategy_bars=missing,
+                                                             observed_bars=len(rows)))
+                        score = usable, -missing, len(rows)
+                        if best is None or score > best[0]:
+                            best = score, rows
+                        if usable:
+                            return rows
+                        break
+                    except (ValueError, KeyError, TypeError, IndexError, OSError) as exc:
+                        self._retrieval_attempts.append(dict(host=host, interval=request_interval,
+                                                             range=request_range, error=str(exc)))
+                        if isinstance(exc, urllib.error.HTTPError):
+                            code = exc.code
+                            if exc.fp is not None:
+                                exc.close()
+                            if code == 429 and retry == 0:
+                                time.sleep(1)
+                                continue
+                        break
+        if best is not None:
+            return best[1]
+        raise ValueError('Yahoo unavailable/incomplete: '+'; '.join(r.get('error', 'missing bars') for r in self._retrieval_attempts)+'; use an authorized CSV/API source')
+
+
+def aggregate_minutes(rows):
+    """Use only five observed consecutive minute OHLCV bars per 5m candle."""
+    groups = {}
+    for bar in rows:
+        minute = bar.time.minute - bar.time.minute % 5
+        start = bar.time.replace(minute=minute)
+        groups.setdefault(start, []).append(bar)
+    complete = []
+    for start, group in sorted(groups.items()):
+        if [bar.time for bar in group] != [start+dt.timedelta(minutes=i) for i in range(5)]:
+            continue
+        complete.append(Bar(start, group[0].open, max(b.high for b in group),
+                            min(b.low for b in group), group[-1].close,
+                            sum(b.volume for b in group)))
+    return validate(complete)
 
 
 class DirectoryUpstox(UpstoxProvider):

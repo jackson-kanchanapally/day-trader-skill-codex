@@ -7,9 +7,10 @@ from pathlib import Path
 import threading
 
 from india.data import Bar, symbol_name, timestamp, validate
-from india.market import DEFAULT_CALENDAR
+from india.market import DEFAULT_CALENDAR, daily_completed
 from workflow.common import upstream
 from .decision import candle_metrics, caution_flags, data_health, decision_state, execution_quote, market_clock
+from .intraday import overlay
 
 SETUPS = {
     'breakout_20d': ('20-day breakout', 40),
@@ -35,15 +36,10 @@ def finite(value):
 
 
 def previous_session(cutoff):
-    day = timestamp(cutoff).date() - dt.timedelta(days=1)
     try:
-        for _ in range(30):
-            if DEFAULT_CALENDAR.trading_day(day, 'NSE'):
-                return day.isoformat()
-            day -= dt.timedelta(days=1)
+        return DEFAULT_CALENDAR.last_completed_session(timestamp(cutoff), 'NSE').isoformat()
     except ValueError:
-        pass
-    return None
+        return None
 
 
 def ranking(row, expected):
@@ -97,7 +93,7 @@ class OpportunityStore:
         return candidate
 
     def _load(self):
-        path = self._path('watchlist.json')
+        path = self._path('daily-watchlist.json') if (self.root/'daily-watchlist.json').exists() else self._path('watchlist.json')
         if not path.is_file():
             return None
         names_path = self._path('instrument-names.json')
@@ -115,15 +111,27 @@ class OpportunityStore:
         hits, results, failures = doc['hits'], doc['results'], doc['failed']
         if not all(isinstance(value, list) for value in (hits, results, failures)):
             raise ValueError('Invalid scan rows')
-        if doc['scanned'] != len(results) or doc['universe'] != len(results)+len(failures):
+        succeeded = [r for r in results if r.get('status') not in ('FAILED', 'UNAVAILABLE', 'STALE', 'SKIPPED_CONFIRMATION_CAP')]
+        result_names = {r.get('symbol') for r in results}
+        failure_names = {r.get('symbol') for r in failures}
+        if doc['scanned'] != len(succeeded) or doc['universe'] != len(result_names | failure_names):
             raise ValueError('Scan coverage counts do not match its saved rows')
         evidence_rows = {symbol_name(row['symbol']): row for row in results}
         checked = set(evidence_rows)
         failed = {symbol_name(row['symbol']) for row in failures}
-        if len(checked) != len(results) or len(failed) != len(failures) or checked & failed:
+        failed_results = {r['symbol'] for r in results if r.get('status') == 'FAILED'}
+        if len(checked) != len(results) or len(failed) != len(failures) or (checked & failed)-failed_results:
             raise ValueError('Duplicate or overlapping scan coverage')
         if any(not isinstance(row.get('error'), str) for row in failures):
             raise ValueError('Invalid failure reason')
+        exceptions = [dict(row, status='FAILED') for row in failures]
+        exceptions.extend(row for row in results if row.get('status') in ('UNAVAILABLE', 'STALE', 'SKIPPED_CONFIRMATION_CAP'))
+        coverage = dict(requested=doc['universe'], scanned=doc['scanned'], failed=len(failures),
+                        unavailable=sum(row.get('status') == 'UNAVAILABLE' for row in results),
+                        stale=sum(row.get('status') == 'STALE' for row in results),
+                        skipped=sum(row.get('status') == 'SKIPPED_CONFIRMATION_CAP' for row in results))
+        if coverage['requested'] != sum(coverage[key] for key in ('scanned', 'failed', 'unavailable', 'stale', 'skipped')):
+            raise ValueError('Scan categories do not reconcile to the requested universe')
         company_names = {}
         if names_stat:
             try:
@@ -146,7 +154,7 @@ class OpportunityStore:
                 raise ValueError('Opportunity is not present in the scanned evidence')
             if not finite(hit['price']) or hit['price'] <= 0 or not finite(hit['volume']) or hit['volume'] < 0:
                 raise ValueError('Invalid opportunity price or volume')
-            if timestamp(hit['as_of']).date() >= timestamp(doc['as_of']).date():
+            if not daily_completed(timestamp(hit['as_of']).date(), timestamp(doc['as_of']), exchange='NSE' if symbol.endswith('.NS') else 'BSE'):
                 raise ValueError('Daily candle is outside the completed-session cutoff')
             name = company_names.get(symbol)
             name = name.strip()[:180] if isinstance(name, str) and name.strip() else symbol.removesuffix('.NS').removesuffix('.BO')
@@ -171,13 +179,15 @@ class OpportunityStore:
                 if hashlib.sha256(saved.read_bytes()).hexdigest()[:20] == scan_id:
                     history_root = directory
                     break
-        dates = sorted({r['as_of'][:10] for r in results})
+        dates = sorted({r['as_of'][:10] for r in results if isinstance(r.get('as_of'), str)})
         counts = {key: sum(key in row['setups'] for row in ranked) for key in SETUPS}
         public = dict(scan_id=scan_id, as_of=doc['as_of'], universe=doc['universe'],
                       scanned=doc['scanned'], failed=len(failures), matched=len(ranked),
+                      coverage=coverage, coverage_exceptions=exceptions,
                       data_dates=dates, expected_session=expected, setups=counts, ranking=RANKING,
                       opportunities=ranked, failures=failures, execution_enabled=False)
-        self._key, self._cached = key, dict(public=public, originals=originals, history_root=history_root)
+        self._key, self._cached = key, dict(public=public, originals=originals, history_root=history_root,
+                                           daily_sha256=hashlib.sha256(payload).hexdigest())
         return self._cached
 
     def listing(self):
@@ -185,18 +195,22 @@ class OpportunityStore:
             data = self._load()
             if not data:
                 return dict(scan_id=None, opportunities=[], failures=[], ranking=RANKING,
-                            universe=0, scanned=0, failed=0, matched=0, execution_enabled=False)
+                            universe=0, scanned=0, failed=0, matched=0, coverage={}, coverage_exceptions=[], execution_enabled=False)
             public, now = data['public'], self.clock()
+            intraday, coverage = overlay(self.root, data['daily_sha256'], public['as_of'],
+                                         set(data['originals']), now)
             records = self.research.listing() if self.research else dict(items=[], rejected=0)
             rows = []
             for original in public['opportunities']:
                 exchange = 'NSE' if original['symbol'].endswith('.NS') else 'BSE'
                 health = data_health(public['as_of'], original['as_of'][:10], now, exchange)
                 market = market_clock(now, exchange)
+                entry = intraday.get(original['symbol'], dict(status='NOT_CHECKED', eligible=False))
                 rows.append(dict(original, flags=caution_flags(original), data_status=health['status'],
+                                 entry=entry,
                                  tradeability='BLOCKED' if health['status'] != 'CURRENT_DAILY' or not market['entry_window_open'] else 'INCOMPLETE',
                                  research_count=sum(r['symbol'] == original['symbol'] for r in records['items'])))
-            return dict(public, opportunities=rows, observed_at=now.isoformat(),
+            return dict(public, opportunities=rows, observed_at=now.isoformat(), intraday=coverage,
                         market=market_clock(now), stale_count=sum(r['data_status'] != 'CURRENT_DAILY' for r in rows),
                         research_rejected=records['rejected'],
                         caution_note='Review thresholds: MA20 extension ≥10%, RSI ≥70, five-close range ≥10%, volume ≥3×, approximate turnover <₹1 crore, daily |move| ≥8%. These are research flags, not exchange rules or trading probabilities.')
@@ -224,7 +238,7 @@ class OpportunityStore:
                             or saved.get('source') != original.get('source')):
                         raise ValueError('Candle snapshot does not match scan')
                     bars = validate([Bar(timestamp(b['time']), *(float(b[k]) for k in ('open', 'high', 'low', 'close', 'volume'))) for b in saved['bars']])
-                    rows = [b for b in bars if b.time.date() < timestamp(public['as_of']).date()
+                    rows = [b for b in bars if daily_completed(b.time.date(), timestamp(public['as_of']), exchange='NSE' if symbol.endswith('.NS') else 'BSE')
                             and str(b.time.year) in DEFAULT_CALENDAR.document.get('NSE' if symbol.endswith('.NS') else 'BSE', {})
                             and DEFAULT_CALENDAR.trading_day(b.time.date(), 'NSE' if symbol.endswith('.NS') else 'BSE')]
                     if (not rows or rows[-1].time.isoformat() != original['as_of']
@@ -247,14 +261,18 @@ class OpportunityStore:
                 except (ValueError, OSError, KeyError, TypeError, IndexError):
                     history_note = 'Saved candles are missing or do not match this scan. Stored indicators remain available.'
             now = self.clock()
+            intraday, coverage = overlay(self.root, data['daily_sha256'], public['as_of'],
+                                         set(data['originals']), now)
             try:
                 context = json.loads(self._path('execution-context.json').read_text())
             except (ValueError, OSError):
                 context = {}
             records = self.research.listing() if self.research else dict(items=[], rejected=0)
             linked = [dict(r, same_scan_cutoff=r.get('source_scan_cutoff') == public['as_of']) for r in records['items'] if r['symbol'] == symbol]
-            decision = decision_state(row, public['as_of'], now, execution_quote(context, symbol, now), linked)
+            decision = decision_state(row, public['as_of'], now, execution_quote(context, symbol, now),
+                                      linked, intraday.get(symbol))
             return dict(**row, scan_id=public['scan_id'], scan_cutoff=public['as_of'], ranking=evidence,
+                        entry=intraday.get(symbol, dict(status='NOT_CHECKED', eligible=False)), intraday=coverage,
                         evidence=setup_evidence(original), candles=history, history_note=history_note,
                         metrics=metrics, flags=caution_flags(original, metrics), decision=decision,
                         provider_attempts=original.get('provider_attempts', []),

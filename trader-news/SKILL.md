@@ -3,7 +3,7 @@ name: trader-news
 description: Monitor Indian-symbol headlines and supplied issuer announcements with dated deduplication.
 ---
 
-Use `news.py` for Indian-symbol RSS headlines and supplied issuer/exchange announcement exports. Read watchlist/plan/portfolio symbols, respect publication cutoffs and deduplicate stable item IDs. Open the original issuer/exchange source before presenting a headline as a verified fact. RSS coverage is incomplete; source failures must be reported.
+Use `news.py` for Indian-symbol RSS headlines, current official NSE announcement/financial/insider feeds and supplied issuer/exchange announcement exports. Read watchlist/plan/portfolio symbols, respect publication cutoffs and merge the same story across IDs, links and normalized title/publication date. Preserve all touched symbols, sources and publication timestamps; persisted aliases prevent repeats even when a GUID changes. Repeat `--feed-url` for multiple authorized feeds. Use `--names FILE` (or workspace `instrument-names.json`) for issuer-name attribution alongside NSE/BSE symbol mentions. `--move-pct` flags completed-candle moves; it is not a live-price filter. Open the original issuer/exchange source before presenting a headline as a verified fact. RSS coverage is a short current window; source failures must be reported.
 
 ```sh
 python3 /absolute/path/to/trader-news/news.py --tickers TCS.NS --hours 24

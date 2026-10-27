@@ -78,7 +78,7 @@ export default function DecisionPanel({ detail, onResearch, onPrepare }) {
           <p>{d.market.label}</p>
         </article>
         <article>
-          <span>03 · INDEPENDENT RISK</span>
+          <span>03 · EXACT-ORDER RISK</span>
           <strong>Not cleared</strong>
           <p>Current exact-order check required</p>
         </article>
@@ -100,7 +100,7 @@ export default function DecisionPanel({ detail, onResearch, onPrepare }) {
             : `${age(d.data.scan_age_seconds)} since scan cutoff`}
         </span>
         <span>Checked {when(d.data.observed_at)}</span>
-        <span>Saved data · intraday signal required</span>
+        <span>ORB entry: {detail.entry?.status?.replaceAll("_", " ") || "NOT CHECKED"}</span>
       </div>
       <div className="decision-columns">
         <div>

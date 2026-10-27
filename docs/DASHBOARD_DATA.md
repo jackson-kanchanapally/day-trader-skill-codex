@@ -8,8 +8,9 @@ appear on every company page:
 - **Tradeability now** checks current calendar coverage, the default entry window,
   daily-data age and availability of a dated execution snapshot. It remains
   incomplete until a separate current completed-bar entry and exact plan exist.
-- **Independent risk** requires a current exact-order review; neither a high score
-  nor a historical PASS clears a new order.
+- **Exact-order risk** requires a current numerical check of the proposed order.
+  Independent specialist review is optional; neither a high setup score nor a
+  historical PASS clears a new order.
 
 An explicit **Run in Codex** action submits the displayed prompt to the local
 Codex app-server in a new thread. The Codex request panel streams coordinator
@@ -27,6 +28,25 @@ the expected session. Weekend and holiday hours do not make Friday's candle stal
 by themselves. A future scan or uncovered calendar year fails closed. The displayed
 default entry window is 09:30–15:00 IST; a configured strategy can be stricter and
 the numerical risk engine remains authoritative.
+
+Daily coverage lists requested, scanned, failed, unavailable, stale and skipped
+symbols. These categories reconcile to the requested universe; capped candidates
+are skipped and do not also count as scanned. Coverage exceptions retain their
+individual reasons, including insufficient history.
+
+The scanner captures the exact daily source bytes before fetching an ORB
+shortlist. New ORB archives carry `daily_origin` with that SHA-256 and cutoff.
+Publication checks the current daily file against this origin. A changed daily
+file leaves the ORB archive saved with a `SOURCE_CHANGED` publication receipt;
+it cannot silently become evidence for the new shortlist. Explicit imports of
+older artifacts are labelled `IMPORTED_AFTER_SCAN` in the registry.
+
+Full provider OHLCV snapshots already fetched for an ORB scan are compressed in
+its `candles/` directory and hashed in `evidence.json`. Archiving performs no
+new price fetch, excludes forming/future bars and creates no candles for
+summary-only screening. Failed rows retain provider attempts and observed
+missing strategy timestamps. Later failed refreshes preserve the prior expired
+trigger as history while current eligibility remains unavailable.
 
 ## Research cautions
 
@@ -102,9 +122,9 @@ preserve a selected source cutoff automatically. Date options are optional and
 use an IST date/time picker. They continue available company research while
 leaving sizing and order clearance pending.
 
-Choosing **Plan a paper trade** asks for explicit capital and per-trade loss;
-other account limits and positions are optional form details. Codex obtains
-missing constraints, costs and dated metadata before any actual sizing. The
+Choosing **Plan a paper trade** uses saved capital and per-trade loss settings;
+form entries supply explicit overrides. Other account limits and positions are
+optional form details. Codex obtains missing constraints, costs and dated metadata before any actual sizing. The
 advanced trade settings also allow an explicit closed-market diagnostic. Copying
 the text runs nothing in the browser, and no engine defaults become user choices.
 

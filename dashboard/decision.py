@@ -128,19 +128,22 @@ def execution_quote(document, symbol, now):
         return absent
 
 
-def decision_state(row, cutoff, now, quote=None, research=None):
+def decision_state(row, cutoff, now, quote=None, research=None, entry=None):
     exchange = 'NSE' if row['symbol'].endswith('.NS') else 'BSE'
     market = market_clock(now, exchange)
     health = data_health(cutoff, row['as_of'][:10], now, exchange)
     quote = quote or execution_quote({}, row['symbol'], now)
+    entry = entry or {'status': 'NOT_CHECKED', 'eligible': False}
     checks = [dict(label='Daily data', status=health['status'],
                    reason='Daily candles support research. A separate completed intraday entry is required.'),
               dict(label='Entry window now', status='OPEN' if market['entry_window_open'] else 'CLOSED', reason=market['label']),
-              dict(label='Completed-bar entry', status='REQUIRED', reason='The daily match does not include a current entry signal.'),
+              dict(label='Completed-bar entry', status='REQUIRED' if entry['status'] == 'NOT_CHECKED' else entry['status'],
+                   reason='Saved ORB confirmation %s; expires %s.' % (entry.get('signal_confirmed_at'), entry.get('expires_at'))
+                   if entry.get('signal_confirmed_at') else 'No current completed-bar entry is established.'),
               dict(label='Spread and price bands', status=quote['status'], reason=quote['reason']),
               dict(label='Tick metadata', status='REQUIRED', reason='Verify dated INR metadata for the chosen entry session.'),
               dict(label='Capital and costs', status='REQUIRED', reason='Explicit account limits and a cost-inclusive exact plan are required.'),
-              dict(label='Independent risk', status='NOT_CLEARED', reason='A historical finding cannot clear a new order.')]
+              dict(label='Exact-order risk', status='NOT_CLEARED', reason='A fresh numerical risk PASS is required; independent specialist review is optional.')]
     blockers = []
     if health['status'] != 'CURRENT_DAILY':
         blockers.append('Daily evidence is stale, future-dated or outside calendar coverage.')
@@ -154,7 +157,9 @@ def decision_state(row, cutoff, now, quote=None, research=None):
         blockers.append('Spread exceeds the 20 bps research caution threshold.')
     if quote['status'] == 'CAPTURED' and abs(quote['ask']-quote['upper_price_band']) < 1e-9:
         blockers.append('Ask is at the supplied upper price band. Executable volume and queue position remain unverified.')
-    blockers.append('Current completed-bar entry, exact plan and independent risk clearance are required.')
+    if not entry.get('eligible'):
+        blockers.append('A current completed-bar entry is required.')
+    blockers.append('Exact plan and exact-order numerical risk PASS are required.')
     return dict(setup=dict(status='MATCHED', score=row['score']),
                 tradeability=dict(status='BLOCKED' if health['status'] != 'CURRENT_DAILY' or not market['entry_window_open']
                                   or quote['status'] == 'CAPTURED' and quote.get('halted') else 'INCOMPLETE', reasons=blockers),

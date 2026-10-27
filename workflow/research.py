@@ -1,121 +1,153 @@
 """Dated Indian news, issuer financial exports and public insider disclosures."""
 import csv
 import datetime as dt
+import hashlib
+import re
 from pathlib import Path
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
+from india.data import IST
+
 from .common import clock, digest, envelope, exchange_of, number, read, upstream
+from .financials import financials
 
 
-def news(symbols, now, state, hours=24, offline=None, feed_url=None, announcements=None, all_items=False):
-    """Reuse the upstream RSS parser; maintain one ID per published item."""
+def news(symbols, now, state, hours=24, offline=None, feed_url=None, announcements=None, all_items=False, names=None):
+    """Original story-level semantics with Indian issuer/venue attribution."""
     number(hours, 'hours')
     items, errors, seen = [], [], dict(state.get('seen', {}))
     m = upstream('news')
+    templates = feed_url if isinstance(feed_url, (list, tuple)) else [feed_url]
     for symbol in symbols:
         exchange_of(symbol)
-        try:
+        for template in templates:
+            try:
+                if offline:
+                    raw = (Path(offline)/('yahoo-'+symbol+'.xml')).read_bytes()
+                    origin = 'Supplied RSS'
+                else:
+                    template = template or 'https://feeds.finance.yahoo.com/rss/2.0/headline?s={symbol}&region=IN&lang=en-IN'
+                    url = template.replace('{symbol}', urllib.parse.quote(symbol))
+                    if not url.startswith('https://'):
+                        raise ValueError('News feed must be HTTPS')
+                    with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'IndianTradingResearch/1.0'}), timeout=20) as response:
+                        raw = response.read(2_000_001)
+                    if len(raw) > 2_000_000:
+                        raise ValueError('News feed exceeds 2 MB')
+                    origin = url
+                for item in m.parse_rss(raw, symbol):
+                    when = item.pop('time', None)
+                    if when is None:
+                        continue
+                    published = clock(when.isoformat() if when.tzinfo else when.isoformat()+'+00:00')
+                    item.update(published_at=published.isoformat(), source=origin)
+                    items.append(item)
+            except (ValueError, OSError, ET.ParseError, AttributeError) as exc:
+                errors.append(dict(symbol=symbol, feed=template, error=str(exc)))
             if offline:
-                raw = (Path(offline)/('yahoo-'+symbol+'.xml')).read_bytes()
-            else:
-                template = feed_url or 'https://feeds.finance.yahoo.com/rss/2.0/headline?s={symbol}&region=IN&lang=en-IN'
-                url = template.replace('{symbol}', urllib.parse.quote(symbol))
-                if not url.startswith('https://'):
-                    raise ValueError('News feed must be HTTPS')
-                with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'IndianTradingResearch/1.0'}), timeout=20) as response:
-                    raw = response.read(2_000_001)
-                if len(raw) > 2_000_000:
-                    raise ValueError('News feed exceeds 2 MB')
-            parsed = m.parse_rss(raw, symbol)
-            for item in parsed:
-                when = item.get('time')
-                if when is None:
-                    continue
-                published = clock(when.isoformat())
-                if when.tzinfo is None:
-                    published = clock(when.isoformat()+'+00:00')
-                item['published_at'] = published.isoformat()
-                item.pop('time', None)
-                item['source'] = 'Supplied RSS' if feed_url or offline else 'Yahoo Finance RSS (India symbols)'
-                items.append(item)
-        except (ValueError, OSError, ET.ParseError, AttributeError) as exc:
-            errors.append(dict(symbol=symbol, error=str(exc)))
+                break
+    if not offline:
+        from .nse_filings import FEEDS, _fetch
+        exchange_feeds = (
+            'https://nsearchives.nseindia.com/content/RSS/Online_announcements.xml',
+            *FEEDS,
+            'https://nsearchives.nseindia.com/content/RSS/InsiderTrading.xml',
+        )
+        for feed in exchange_feeds:
+            try:
+                root = ET.fromstring(_fetch(feed, 2_000_000))
+                for item in root.findall('.//item'):
+                    title = (item.findtext('title') or '').strip()
+                    summary = (item.findtext('description') or '').strip()
+                    link = (item.findtext('link') or '').strip()
+                    stamp = (item.findtext('pubDate') or '').strip()
+                    published = dt.datetime.strptime(stamp, '%d-%b-%Y %H:%M:%S').replace(tzinfo=IST)
+                    if published > now or not now-dt.timedelta(hours=hours) <= published or not link.startswith('https://'):
+                        continue
+                    for symbol in symbols:
+                        if not symbol.endswith('.NS'):
+                            continue
+                        issuer = (names or {}).get(symbol, '')
+                        stem = symbol.removesuffix('.NS')
+                        source_file = urllib.parse.urlsplit(link).path.rsplit('/', 1)[-1].upper()
+                        title_words = re.sub(r'[^A-Z0-9]+', ' ', title.upper()).strip()
+                        issuer_words = re.sub(r'[^A-Z0-9]+', ' ', issuer.upper()).strip()
+                        matched = (source_file.startswith(stem+'_') or
+                                   bool(issuer_words and title_words == issuer_words))
+                        if not matched:
+                            continue
+                        items.append(dict(id='nse:'+hashlib.sha256(link.encode()).hexdigest(),
+                                          ticker=symbol, title=title+' — '+summary[:180],
+                                          summary=summary, link=link, published_at=published.isoformat(),
+                                          source=feed, kind='filing', touches=[symbol]))
+            except (OSError, ValueError, ET.ParseError) as exc:
+                errors.append(dict(feed=feed, error=str(exc)))
     if announcements:
         for row in read(announcements)['items']:
             if row['symbol'] in symbols:
-                items.append(dict(id='announcement:'+digest(row), ticker=row['symbol'], title=row['title'],
+                items.append(dict(id=row.get('id') or 'announcement:'+digest(row), ticker=row['symbol'], title=row['title'],
                                   link=row['source'], published_at=clock(row['published_at']).isoformat(),
-                                  source='User-supplied exchange/issuer announcement export', kind='filing'))
-    fresh = []
+                                  source=row['source'], kind='filing'))
+    m.KEYWORDS = [(label, pattern) for label, pattern in m.KEYWORDS if label not in ('macro', 'regulatory')]
+    m.KEYWORDS.extend([('macro', r'\bRBI\b|\bMPC\b|\brepo rate\b|\bCPI\b|\binflation\b'),
+                       ('regulatory', r'\bSEBI\b|\bNSE\b|\bBSE\b|\bNCLT\b|\bCCI\b')])
+    fresh, stories = [], []
     for item in items:
         published = clock(item['published_at'])
         if not now-dt.timedelta(hours=hours) <= published <= now:
             continue
-        key = digest([item['ticker'], item['id']])
-        if all_items or key not in seen:
+        m.tag([item], {s: None for s in symbols})
+        text = item['title']+' '+(item.get('summary') or '')
+        touches = set(item['touches'])
+        for symbol in symbols:
+            stem, venue = symbol.rsplit('.', 1)
+            exchange = 'NSE' if venue == 'NS' else 'BSE'
+            patterns = [r'(?<![A-Z0-9])'+re.escape(symbol)+r'(?![A-Z0-9])',
+                        r'\b'+exchange+r'\s*:\s*'+re.escape(stem)+r'\b']
+            company = (names or {}).get(symbol)
+            if isinstance(company, str) and len(company.strip()) >= 4:
+                patterns.append(r'\b'+re.escape(company.strip()).replace(r'\ ', r'\s+')+r'\b')
+            if any(re.search(pattern, text, re.I) for pattern in patterns):
+                touches.add(symbol)
+        item['touches'] = sorted(touches)
+        title = re.sub(r'\W+', ' ', item['title'].casefold()).strip()
+        link = urllib.parse.urlsplit(item.get('link') or '')
+        normalized_link = urllib.parse.urlunsplit((link.scheme.lower(), link.netloc.lower(), link.path.rstrip('/'), link.query, ''))
+        aliases = {digest(['title', title, published.date().isoformat()])}
+        if item.get('id'):
+            aliases.add(digest(['id', item['id']]))
+        if normalized_link:
+            aliases.add(digest(['link', normalized_link]))
+        # Components are merged transitively: a third feed can bridge an id
+        # and a changed title/link already seen in two earlier feed items.
+        matches = [story for story in stories if story['_aliases'] & aliases]
+        was_seen = any(key in seen for key in aliases) or digest([item['ticker'], item['id']]) in seen
+        item.update(sources=[item['source']], publications=[dict(published_at=item['published_at'], source=item['source'])],
+                    _aliases=aliases, _seen=was_seen)
+        for match in matches:
+            item['_aliases'].update(match['_aliases'])
+            item['_seen'] = item['_seen'] or match['_seen']
+            item['touches'] = sorted(set(item['touches']) | set(match['touches']))
+            item['sources'] = sorted(set(item['sources']) | set(match['sources']))
+            item['publications'].extend(match['publications'])
+            item['published_at'] = min(item['published_at'], match['published_at'])
+            item['tags'] = sorted(set(item['tags']) | set(match['tags']))
+            stories.remove(match)
+        stories.append(item)
+    for item in stories:
+        aliases, already = item.pop('_aliases'), item.pop('_seen')
+        for key in aliases:
+            seen[key] = item['published_at']
+        if all_items or not already:
             fresh.append(item)
-        seen[key] = published.isoformat()
     seen = {key: value for key, value in seen.items() if clock(value) >= now-dt.timedelta(days=30)}
-    fresh.sort(key=lambda item: item['published_at'], reverse=True)
-    m.KEYWORDS = [(label, pattern) for label, pattern in m.KEYWORDS if label not in ('macro', 'regulatory')]
-    m.KEYWORDS.extend([('macro', r'\bRBI\b|\bMPC\b|\brepo rate\b|\bCPI\b|\binflation\b'),
-                       ('regulatory', r'\bSEBI\b|\bNSE\b|\bBSE\b|\bNCLT\b|\bCCI\b')])
-    m.tag(fresh, {symbol: None for symbol in symbols})
+    fresh.sort(key=lambda item: (item['published_at'], item['title']), reverse=True)
     return envelope('news', now, as_of=now.isoformat(), items=fresh, errors=errors,
-                    coverage='RSS headlines and supplied announcements; not complete exchange coverage'), {'seen': seen}
+                    coverage='Merged Yahoo headlines, current official NSE RSS filings and supplied issuer announcements; RSS windows are bounded and not complete archive coverage'), {'seen': seen}
 
 
-def financials(path, symbol, now):
-    """Accept normalized, sourced quarters; never infer issuer facts from prices."""
-    doc = read(path)
-    if doc['symbol'] != symbol or doc.get('currency') != 'INR' or doc.get('basis') not in ('consolidated', 'standalone'):
-        raise ValueError('Financial export requires matching symbol, INR and explicit reporting basis')
-    multiplier = {'INR': 1, 'INR_thousand': 1000, 'INR_lakh': 100000,
-                  'INR_million': 1000000, 'INR_crore': 10000000}.get(doc.get('unit'))
-    if multiplier is None:
-        raise ValueError('Specify an explicit INR financial reporting unit')
-    quarters, seen = [], set()
-    for row in doc['quarters']:
-        published = clock(row['published_at'])
-        if published > now:
-            continue
-        start, end = dt.date.fromisoformat(row['period_start']), dt.date.fromisoformat(row['period_end'])
-        if not 75 <= (end-start).days <= 100 or end > published.date():
-            raise ValueError('Financial rows must be completed standalone quarters, not cumulative YTD')
-        if (start, end) in seen:
-            raise ValueError('Duplicate period/restatement: select the version known at the cutoff')
-        seen.add((start, end))
-        if not str(row.get('source', '')).startswith('https://'):
-            raise ValueError('Financial row requires the original HTTPS filing source')
-        revenue = number(row['revenue'], 'revenue', zero=True)*multiplier
-        profit, eps = float(row['net_profit'])*multiplier, float(row['diluted_eps'])
-        number(abs(profit), 'net_profit', zero=True)
-        number(abs(eps), 'diluted_eps', zero=True)
-        quarters.append(dict(period_start=start.isoformat(), period_end=end.isoformat(),
-                             published_at=published.isoformat(), source=row['source'], revenue=revenue,
-                             net_profit=profit, diluted_eps=eps,
-                             net_margin_pct=100*profit/revenue if revenue else None))
-        for field, margin in (('gross_profit', 'gross_margin_pct'), ('operating_profit', 'operating_margin_pct')):
-            amount = float(row[field])*multiplier if row.get(field) is not None else None
-            if amount is not None:
-                number(abs(amount), field, zero=True)
-            quarters[-1][field] = amount
-            quarters[-1][margin] = 100*amount/revenue if amount is not None and revenue else None
-    quarters.sort(key=lambda q: q['period_end'])
-    for row in quarters:
-        end = dt.date.fromisoformat(row['period_end'])
-        previous = next((q for q in quarters if dt.date.fromisoformat(q['period_end']).year == end.year-1 and q['period_end'][5:] == row['period_end'][5:]), None)
-        row['revenue_yoy_pct'] = 100*(row['revenue']/previous['revenue']-1) if previous and previous['revenue'] else None
-        row['profit_yoy_pct'] = 100*(row['net_profit']/previous['net_profit']-1) if previous and previous['net_profit'] > 0 else None
-        row['eps_yoy_pct'] = 100*(row['diluted_eps']/previous['diluted_eps']-1) if previous and previous['diluted_eps'] > 0 else None
-    trailing = quarters[-4:]
-    contiguous = len(trailing) == 4 and all((dt.date.fromisoformat(b['period_start'])-dt.date.fromisoformat(a['period_end'])).days == 1 for a, b in zip(trailing, trailing[1:]))
-    return envelope('analyst', now, symbol=symbol, basis=doc['basis'], status='AVAILABLE' if quarters else 'UNAVAILABLE',
-                    quarters=quarters, ttm_revenue=sum(q['revenue'] for q in trailing) if contiguous else None,
-                    ttm_net_profit=sum(q['net_profit'] for q in trailing) if contiguous else None,
-                    limitations=['Input exports must be reconciled with original issuer/exchange filings.', 'EPS is in INR per share; no automatic split/restatement reconciliation.'])
 
 
 def disclosures(path, now, state, symbols=None, all_items=False):

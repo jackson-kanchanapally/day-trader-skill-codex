@@ -2,7 +2,7 @@
 
 Current compatibility and executed regressions are recorded in
 [parity implementation results](PARITY_IMPLEMENTATION_RESULTS.md).
-G01–G06 are implemented; G07–G13 remain deferred. This is not complete upstream parity.
+The original modular workflow is the default. Batched/two-stage scans, replay watches, story merging, expanded financial imports and simulation/allocation controls are active. See [the current compatibility contract](ORIGINAL_WORKFLOW.md) for commands, evidence and explicit market/integration differences.
 
 | Area | Active behavior / boundary |
 | --- | --- |
@@ -12,7 +12,8 @@ G01–G06 are implemented; G07–G13 remain deferred. This is not complete upstr
 | Alerts | Actual calendar hours and next opening; unknown subsequent coverage gives null/reason; opening bell deduplicates per configured session event |
 | Daily scanner | Expected completed-session date required; `MATCH`, `NO_SETUP`, `STALE`, `UNAVAILABLE`, `FAILED` are distinct; stale data never enters current hits |
 | Budget | `--limit [PRICE]`, `--prices FILE`, `--portfolio FILE`; an existing local ledger overrides estimates and rejects conflicting snapshots |
-| Deferred | Broad-fetch batching, two-stage caps, historical watch replay, story merging, financial expansion, forward promotion, weights and partial execution fills |
+| Active compatibility additions | Batched/two-stage scans, replay/recovery watches, merged news, financial period/revision adapters, window/histogram/verdict controls and INR allocations |
+| External/separate boundaries | Automatic Indian filing acquisition, independently verified real data/fees/liquidity, forward promotion, external broker transport and partial execution receipts |
 
 For example, after a valid plan exists:
 
@@ -137,13 +138,13 @@ python3 trader-scanner/scan.py orb --symbols TCS.NS,RELIANCE.NS --provider upsto
 python3 trader-entry/entry.py watch TCS.NS --provider upstox --every 30 --max-checks 120 --write
 ```
 
-Universe discovery reads [Upstox's public BOD directory](https://upstox.com/developer/api-documentation/instruments/), filtered to single-share cash equities. `--instruments FILE` supplies a saved directory. NSE symbols retain `.NS`; BSE uses the directory's exchange token plus `.BO`. Directory discovery does **not** validate raw tick units. Exact exchange eligibility and source permissions still require verification.
+NSE universe discovery reads the official [NSE EQ-series list](https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv) and [ETF list](https://nsearchives.nseindia.com/content/equities/eq_etfseclist.csv), retaining normal EQ single-share stocks. `--instruments FILE` supplies an Upstox directory instead; BSE still uses its public directory and exchange token plus `.BO`. Directory discovery does **not** validate raw tick units. Exact execution eligibility and source permissions still require verification.
 
-Yahoo requests one year of daily bars, sixty days of five-minute bars, or seven days of one-minute bars. It is an unofficial interface, can be delayed or unavailable, and is never described as live. NSE supports up to 120 calendar days in disjoint requests of at most 28 days; Upstox caps requests at 28 days. Both support five-minute/daily candles, not one-minute input in this implementation. An unavailable interval fails explicitly. Use longer authorized CSV history for the Time Machine when needed. There is no guaranteed lifetime-free market feed.
+Yahoo screening batches request three months of daily closes or the current five-minute session, followed by full three-month daily / current-session ORB snapshots where confirmation is needed. Other five-minute history requests use sixty days, and one-minute requests use seven days. `--volume-basis same-time` requests historical five-minute samples; the original opening-range volume filter is the CLI default. It is an unofficial interface, can be delayed or unavailable, and is never described as live. NSE supports up to 120 calendar days in disjoint requests of at most 28 days; Upstox caps requests at 28 days. Both support five-minute/daily candles, not one-minute input in this implementation. An unavailable interval fails explicitly. Use longer authorized CSV history for the Time Machine when needed. There is no guaranteed lifetime-free market feed.
 
-For `.NS` stocks, unavailable or incomplete Yahoo five-minute/daily snapshots automatically fall back to the existing NSE provider. `--no-fallback` disables this automatic choice; `--provider nse` selects NSE directly. Reports retain per-symbol provider attempts and provenance, and use a whole snapshot from the selected provider. CSV never contacts a fallback. `.BO` stocks never use NSE prices; there is no verified direct BSE website OHLCV adapter, so use Yahoo, configured Upstox BSE or an authorized BSE CSV. This change does not create website/data permissions.
+For `.NS` stocks, unavailable or incomplete Yahoo five-minute/daily snapshots automatically fall back to the existing NSE provider. A prefetched Yahoo attempt is reused; fallback does not repeat it. A current-session request limits the NSE fallback to that session; historical RVOL keeps its required history. `--no-fallback` disables this automatic choice; `--provider nse` selects NSE directly. Reports retain per-symbol provider attempts and provenance, and use a whole snapshot from the selected provider. CSV never contacts a fallback. `.BO` stocks never use NSE prices; there is no verified direct BSE website OHLCV adapter, so use Yahoo, configured Upstox BSE or an authorized BSE CSV. This change does not create website/data permissions.
 
-`--csv FILE` accepts one or multiple symbols/intervals with the existing `symbol,interval,time,open,high,low,close,volume` schema. `--offline DIR` accepts per-symbol CSV or Yahoo chart JSON files. Future/forming rows are excluded before numeric analysis; null slots remain gaps, and partial OHLCV values fail. No resampling, fabricated volume or mixed-provider candle reconstruction occurs.
+`--csv FILE` accepts one or multiple symbols/intervals with the existing `symbol,interval,time,open,high,low,close,volume` schema. `--offline DIR` accepts per-symbol CSV or Yahoo chart JSON files. Future/forming rows are excluded before numeric analysis; null slots remain gaps, and partial OHLCV values fail. Current Yahoo recovery can aggregate five consecutive observed minute bars into one five-minute candle. Any missing minute prevents that candle; volume is summed only from observed values, and snapshots from different providers are never joined.
 
 Regular cash-equity clock checks use the configured calendar. The strategy conservatively excludes all data at/after 15:15 IST to avoid closing-auction contamination. Defaults are no entries before 09:30, none after 15:00 and flatten at 15:10; earlier custom boundaries are supported. Built-in coverage remains 2026 and BSE shares the bundled calendar. Supply a verified calendar for other years/exchange-specific differences. Sourced exceptional session windows are supported by the calendar; ORB analysis fails explicitly for evening or shortened sessions. Coverage warnings appear in the final 30 days, and expired coverage fails closed. See [execution assumptions](EXECUTION.md).
 
@@ -176,9 +177,19 @@ Sizing/costs retain the intraday cash-equity assumptions from `india/market.py`;
 
 ## Research inputs
 
-News: `news.py --tickers SYMBOL.NS --announcements FILE` accepts `{"items": [{"symbol", "title", "published_at", "source"}]}` with original source links. Default RSS uses Indian symbols; an authorized HTTPS issuer RSS template can be selected through `--feed-url 'https://issuer.example/feed?symbol={symbol}'`. Stored IDs deduplicate events. Move checks compare completed candles against the previous session's last available candle; they are not live quotes or official closing-price reconciliation. Use `--no-moves` for headlines only or `--prices-csv FILE` for a separate authorized OHLCV export. Headlines are leads, not verified facts or complete announcement coverage.
+By default, news also reads bounded current official NSE announcement,
+financial-results and insider RSS once per invocation. The analyst reads the official
+paginated NSE integrated index, current results RSS and matching XBRL when no local financial
+export exists. `facts.py SYMBOL.NS --basis standalone` selects a basis and
+`--max-filings N` bounds document reads. It checks exact symbol, undimensioned
+quarter context, INR units and publication cutoff, reporting source hashes and
+errors. The bounded index is not an unlimited historical company-facts archive;
+older quarters, PDFs and unsupported taxonomies remain unavailable until a
+sourced normalized export is supplied.
 
-Financials: `facts.py SYMBOL.NS --filing FILE --write` requires `symbol`, `currency: "INR"`, `basis` (`consolidated` or `standalone`), `unit` (`INR`, `INR_thousand`, `INR_lakh`, `INR_million`, `INR_crore`) and `quarters`. Each quarter requires `period_start`, `period_end`, `published_at`, original HTTPS `source`, `revenue`, `net_profit` and `diluted_eps` (INR/share). Supply standalone quarters, not cumulative YTD. Reconcile basis, corporate actions, restatements and units against original filings. See the clearly synthetic [financial example](../tests/fixtures/india/workflow/financials.json). No automatic Indian equivalent of SEC company-facts extraction is claimed.
+News: `news.py --tickers SYMBOL.NS --announcements FILE` accepts `{"items": [{"symbol", "title", "published_at", "source"}]}` with original source links. Default RSS uses Indian symbols; an authorized HTTPS issuer RSS template can be selected through `--feed-url 'https://issuer.example/feed?symbol={symbol}'`. IDs, links and title/publication dates merge stories across feeds and symbols; persisted aliases suppress changed-GUID repeats. `--names FILE` adds issuer-name attribution, repeat `--feed-url` for multiple feeds, and `--move-pct` controls completed-move flags. Move checks compare completed candles against the previous session's last available candle; they are not live quotes or official closing-price reconciliation. Use `--no-moves` for headlines only or `--prices-csv FILE` for a separate authorized OHLCV export. Headlines are leads, not verified facts or complete announcement coverage.
+
+Financials: `facts.py SYMBOL.NS --filing FILE --write` requires `symbol`, `currency: "INR"`, `basis` (`consolidated` or `standalone`), `unit` (`INR`, `INR_thousand`, `INR_lakh`, `INR_million`, `INR_crore`) and `quarters`. Each quarter requires `period_start`, `period_end`, `published_at`, original HTTPS `source`, `revenue`, `net_profit` and `diluted_eps` (INR/share). Standalone quarters are the default. Explicit `period_type: ytd` or `annual` rows derive quarters only from matching fiscal predecessors, retaining both source records. TTM EPS needs `eps_ttm_method: sum_comparable_quarters` and a documented common `eps_share_basis`; otherwise it remains null. Duplicated periods require an ordered `revision_id`/`supersedes` chain. `--filing DIR` or a `companies` export supports multiple symbols, and `--quarters N` limits displayed results after comparisons. Without `--filing`, the tool discovers workspace `financials/SYMBOL.NS.json` or reads the bounded official NSE integrated index, current RSS and XBRL. Reconcile basis, corporate actions, restatements and units against original filings. See the clearly synthetic [financial example](../tests/fixtures/india/workflow/financials.json). The current RSS is not a comprehensive historical company-facts archive.
 
 Indian public disclosures: `ptr.py check --csv FILE` requires `symbol,person,transaction_date,published_at,transaction_type,quantity,source`, with `buy`/`sell` and original HTTPS source. Publications after cutoff are excluded; once-only state persists. It is a public-insider/PIT input adapter, not comprehensive politician-trade surveillance. Without input this compatibility role returns NOT_APPLICABLE.
 
@@ -186,7 +197,7 @@ Indian public disclosures: `ptr.py check --csv FILE` requires `symbol,person,tra
 
 For explicit independent review, `$trader-team` retains the frozen-snapshot engine, ten native agents, hash/cutoff validation and final veto rules documented in [TEAM.md](TEAM.md). Its numerical strategy remains the original Indian engine's fixed range-low/2R default unless `--rr` changes the multiple. Those sealed artifacts have their own schema; they are not interchangeable with a mutable original-style workspace or configurable midpoint/ATR plan.
 
-The React dashboard observes those independent review sessions and actual lifecycle events. It does not automatically display ordinary CLI subprocesses as AI agents. No browser UI starts agents or executes orders. The original-style skill chain and the optional independent review mode remain explicitly distinct.
+The React dashboard observes those independent review sessions and actual lifecycle events. It does not automatically display ordinary CLI subprocesses as AI agents. Dashboard requests can start Codex tool workflows; independent reviews are opt-in and ordinary CLI outputs are not native-agent reviews. The UI cannot approve or fill a paper order. The original-style skill chain and the optional independent review mode remain explicitly distinct.
 
 ## Validation
 

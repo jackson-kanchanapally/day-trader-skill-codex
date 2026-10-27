@@ -1,7 +1,9 @@
 # Indian Trading Agents for Codex
 
-Modular NSE/BSE research tools for Codex, with INR position sizing, local paper
-records, independent specialist reviews, and an optional React dashboard.
+The original day-trader workflow adapted to NSE/BSE, IST and INR: scan → news →
+entry → exit → Time Machine → budget → risk → paper ticket.
+Independent specialist reviews and the React dashboard are optional additions.
+See the [original-workflow compatibility contract](docs/ORIGINAL_WORKFLOW.md).
 
 **Experimental, paper-only software. Live order execution is disabled.**
 
@@ -88,7 +90,7 @@ symbols, their setups, per-symbol candle dates, and counts of
 successfully scanned and failed symbols.
 ```
 
-A full scan may take tens of minutes. `--limit N` deliberately bounds a smaller
+Yahoo scans use batched close screening and bounded full-candle fetching; source limits and fallbacks can still make a broad scan slow. `--limit N` deliberately bounds a smaller
 run. Daily setup checks need at least 30 completed sessions. See
 [the scanner commands](docs/WORKFLOW.md#real-indian-stocks) for CLI usage.
 
@@ -121,9 +123,8 @@ python3 -m dashboard
 ```
 
 Open **http://127.0.0.1:8765**. A fresh workspace starts empty. **New request**
-offers copyable prompts for a stock review, NSE universe discovery and a daily
-scan. Run the copied request in Codex; the browser does not start agents.
-The Opportunities view lists every daily match by setup strength, with company search, setup filters, pagination and CSV export. Click a company for saved daily charts, indicators, score breakdown and setup evidence. Ranking is an explicit research heuristic, not a probability of profit. Standalone scanner files do not create independent team sessions. Individual research also shows saved coordinator prerequisite assessments, with separate labels and source bindings. Company details distinguish setup strength, current tradeability and risk clearance; stock research starts with a symbol, and account inputs appear when planning a paper trade. The Trading journal reads reconciled paper fills and costs from the existing ledger. See [dashboard data contracts](docs/DASHBOARD_DATA.md).
+starts research, NSE universe discovery and market-scan requests through the local Codex runner, with copying available as a fallback. Ordinary requests use the original modular workflow; independent specialists are opt-in.
+The Opportunities view lists every daily match by setup strength, with company search, setup and ORB-entry filters, pagination and CSV export. Hash-bound ORB archives show their separate cutoff and full-shortlist counts; entry expiry is recomputed at display time. Click a company for saved daily charts, indicators, score breakdown and setup evidence. Ranking is an explicit research heuristic, not a probability of profit. Standalone scanner files do not create independent team sessions. Individual research also shows saved coordinator prerequisite assessments, with separate labels and source bindings. Company details distinguish setup strength, current tradeability and risk clearance; stock research starts with a symbol, and account inputs appear when planning a paper trade. The Trading journal reads reconciled paper fills and costs from the existing ledger. See [dashboard data contracts](docs/DASHBOARD_DATA.md).
 
 The animated desks reflect recorded lifecycle events: waiting, working, completed
 review, or attention required. Click a desk to inspect its review, engine evidence

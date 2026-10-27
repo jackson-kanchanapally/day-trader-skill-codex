@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 import sqlite3
 import sys
-import time
 
 from india.market import Calendar, DEFAULT_CALENDAR, session
 from .common import clock, config, digest, envelope, exchange_of, indian_words, read, upstream, utc, write
@@ -22,16 +21,16 @@ def parser(role):
     market = set('--provider --csv --days --instruments --no-fallback'.split())
     selection = set('--symbol --symbols --tickers --watchlist --universe --limit'.split())
     role_flags = {
-        'scanner': market | selection | set('--security-master --exchange --tick --min-price --min-volume --or-minutes --min-volume-x --at --date --until'.split()),
-        'entry': market | selection | set('--security-master --tick --setup --level --interval --or-minutes --min-volume-x --every --max-checks --until'.split()),
+        'scanner': market | selection | set('--security-master --exchange --tick --min-price --min-volume --volume-basis --or-minutes --min-volume-x --at --date --until --workers --batch-size --max-confirm --eligible-only'.split()),
+        'entry': market | selection | set('--security-master --tick --setup --level --interval --or-minutes --volume-basis --min-volume-x --every --max-checks --max-errors --replay --until'.split()),
         'exit': market | set('--security-master --tick --symbol --from --stop --target --entry --or-high --or-low --date --time --flat-by --setup --interval --or-minutes'.split()),
-        'timemachine': market | set('--from --replays --seed'.split()),
-        'budget': {'--from','--limit','--prices','--portfolio'},
+        'timemachine': market | set('--from --replays --seed --window --until'.split()),
+        'budget': {'--from','--limit','--prices','--portfolio','--weights','--targets','--top'},
         'risk': market | {'--from', '--security-master', '--exchange', '--tick'},
         'broker': market | set('--security-master --exchange --tick --symbol --from --index --reply --qty --price --fingerprint --fill-id --fill-bar'.split()),
-        'alerts': market | selection | set('--exchange --from --from-plan --opening-bell --above --below --stop --target --pct --direction --at --label --id --rearm --date'.split()),
-        'news': market | selection | set('--hours --all --feed-url --announcements --no-moves --prices-csv'.split()),
-        'analyst': {'--filing', '--metrics'},
+        'alerts': market | selection | set('--exchange --from --from-plan --opening-bell --above --below --stop --target --pct --direction --at --before-close --label --id --rearm --date'.split()),
+        'news': market | selection | set('--hours --all --feed-url --announcements --no-moves --prices-csv --names --move-pct'.split()),
+        'analyst': {'--filing', '--metrics', '--quarters', '--basis', '--max-filings'},
         'pelosi': selection | {'--csv', '--all'},
     }
     def add(*flags, **options):
@@ -82,6 +81,9 @@ def parser(role):
         add('--limit', type=int)
     add('--prices',help='Dated completed-price JSON for conservative pre-trade sizing')
     add('--portfolio',help='Explicit paper INR snapshot; must match the local ledger if present')
+    add('--weights', help='Original-style SYMBOL.NS=weight,... or weights JSON file')
+    add('--targets', help='Weights JSON export (alternative to --weights)')
+    add('--top', type=int, help='Keep the highest-weight symbols before capped allocation')
     add('--min-price', type=float, default=0)
     add('--min-volume', type=float, default=0)
     add('--setup', choices=['orb', 'level'], default='orb')
@@ -89,8 +91,15 @@ def parser(role):
     add('--interval', choices=['1m', '5m'], default='5m')
     add('--or-minutes', type=int, default=15)
     add('--min-volume-x', type=float)
+    add('--volume-basis', choices=['opening-range', 'same-time'], default='opening-range', help='Original opening-range average by default; optional prior-session same-time RVOL')
     add('--every', type=float, default=30)
     add('--max-checks', type=int, default=120, help='Bound watch polling; Ctrl-C stops earlier')
+    add('--max-errors', type=int, default=5, help='Consecutive transient read failures before a watch stops')
+    add('--replay', action='store_true', help='Fast simulated-clock watch; requires --csv and --now')
+    add('--workers', type=int, default=4, help='Bound Yahoo chart concurrency to 1..8; other sources remain serial')
+    add('--batch-size', type=int, default=20, help='Yahoo close-screen batches of 1..20 symbols before full confirmation')
+    add('--max-confirm', type=int, help='Confirm the highest-turnover ORB candidates; report every skipped symbol')
+    add('--eligible-only', action='store_true', help='Exclude expired historical breakouts from ORB hits')
     add('--from', dest='from_path')
     add('--stop', help='or-mid, or-low, atr:K, pct:X, price:X (or numeric alert stop)')
     add('--target', help='1R, 2R, price:X (or numeric alert target)')
@@ -102,6 +111,7 @@ def parser(role):
     add('--flat-by')
     add('--replays', '--simulations', dest='replays', type=int, default=10000)
     add('--seed', type=int, default=19)
+    add('--window', type=int, default=2, help='Time-of-day resampling window, 0..10 bars')
     add('--index', type=int, default=1)
     add('--reply')
     add('--qty', type=int)
@@ -116,22 +126,28 @@ def parser(role):
     add('--pct', type=float)
     add('--direction', choices=['up', 'down'])
     add('--at')
+    add('--before-close', action='store_true', help='Shift a time alert with a shortened session close')
     add('--until', help='IST entry cutoff override, before flat-by')
     add('--label')
     add('--id')
     add('--rearm', action='store_true')
     add('--hours', type=float, default=24)
     add('--all', action='store_true')
-    add('--feed-url', help='Authorized HTTPS RSS template with {symbol}')
+    add('--feed-url', action='append', help='Repeatable authorized HTTPS RSS template with {symbol}')
+    add('--names', help='Symbol-to-issuer-name JSON for Indian headline attribution')
+    add('--move-pct', type=float, default=3, help='Flag completed-candle moves at or above this absolute percentage')
     add('--announcements', help='Dated issuer/exchange announcement JSON export')
     add('--no-moves', action='store_true', help='Read headlines without completed-candle move checks')
     add('--prices-csv', help='Separate authorized OHLCV CSV for news move checks')
     add('--filing', help='Sourced normalized quarterly financial JSON')
     add('--metrics', help='Output metrics JSON')
+    add('--quarters', type=int, help='Number of quarters to display after full-history comparisons')
+    add('--basis', choices=['consolidated', 'standalone'], default='consolidated')
+    add('--max-filings', type=int, default=40, help='Bound official NSE RSS XBRL reads to 1..80 links')
     return p
 
 
-def symbols(a, workspace):
+def symbols(a, workspace, selection_doc=None):
     values = list(a.tickers or [])
     if a.symbol:
         values.append(a.symbol)
@@ -141,7 +157,7 @@ def symbols(a, workspace):
     path = a.watchlist or a.universe
     if not values and path:
         if str(path).endswith('.json'):
-            doc = read(path)
+            doc = selection_doc if selection_doc is not None else read(path)
             values.extend(r.get('symbol', r.get('ticker')) for r in doc.get('hits', []))
         else:
             values.extend(line.strip().split('|')[0] for line in Path(path).read_text().splitlines() if line.strip() and not line.startswith('#'))
@@ -228,8 +244,15 @@ def run(role, a):
     cal.trading_day(now.date(), a.exchange)
     master = security_master(a.security_master, now)
     data = MarketData(now, a.provider, a.csv_path, a.days, a.instruments, not a.no_fallback, cal)
+    if role == 'entry' and a.volume_basis == 'opening-range':
+        data.intraday_range = '1d'
     command = getattr(a, 'command', None)
-    names = [] if role == 'analyst' or (role == 'alerts' and command in ('reset', 'list', 'clock')) else symbols(a, w)
+    selection_doc, daily_origin = None, None
+    if role == 'scanner' and command == 'orb' and a.watchlist and str(a.watchlist).endswith('.json'):
+        from .intraday_index import capture_daily
+        selection_doc, daily_origin = capture_daily(a.watchlist)
+    explicit_selection = a.tickers or a.symbol or a.symbols or a.items or a.watchlist or a.universe
+    names = [] if role == 'analyst' or (role == 'scanner' and not explicit_selection) or (role == 'alerts' and command in ('reset', 'list', 'clock')) else symbols(a, w, selection_doc)
 
     def output(doc, name, automatic=False):
         if (a.write or automatic) and not a.no_write:
@@ -254,9 +277,30 @@ def run(role, a):
             a.universe = str(w/'universe.txt')
             names = symbols(a, w)
         if not names:
-            raise ValueError('Supply --symbols, --watchlist or a security-master universe first')
+            names, _ = universe(a.exchange, a.instruments)
+        if command == 'orb':
+            from .intraday_index import capture_daily
+            if daily_origin and not set(names) <= {r['symbol'] for r in selection_doc['hits']}:
+                daily_origin = None
+            if daily_origin is None:
+                for parent in (w, *w.parents):
+                    source_path = parent/'daily-watchlist.json'
+                    if source_path.is_file():
+                        source_doc, binding = capture_daily(source_path)
+                        if binding and set(names) <= {r['symbol'] for r in source_doc['hits']}:
+                            daily_origin = binding
+                        break
+            if daily_origin and clock(daily_origin['as_of']) > now:
+                raise ValueError('Daily shortlist cutoff is later than the requested ORB cutoff')
         doc = scan(data, names, now, cfg, command, cal, a.min_price, a.min_volume,
-                   or_minutes=a.or_minutes, min_volume_x=a.min_volume_x, tick=a.tick, master=master)
+                   or_minutes=a.or_minutes, min_volume_x=a.min_volume_x, tick=a.tick, master=master,
+                   volume_basis=a.volume_basis,
+                   workers=a.workers, max_confirm=a.max_confirm, eligible_only=a.eligible_only, batch_size=a.batch_size)
+        if daily_origin is not None:
+            doc['daily_origin'] = daily_origin
+        if not a.no_write:
+            from .scanning import archive_scan
+            archive_scan(w, doc, data)
         result, _ = output(doc, 'watchlist.json', True)
         return result, 1 if doc['failed'] and not doc['scanned'] else 0
 
@@ -267,27 +311,43 @@ def run(role, a):
             raise ValueError('Use watchlist for multiple symbols')
         if a.every <= 0 or a.max_checks < 1 or a.max_checks > 10000:
             raise ValueError('Watch requires positive interval and 1..10000 checks')
-        if command == 'watch' and a.as_of and a.max_checks != 1:
-            raise ValueError('Replay watch uses a fixed clock; supply --max-checks 1')
-        for check_index in range(a.max_checks if command == 'watch' else 1):
-            results = []
-            for sym in names:
-                try:
-                    result = entry(data.history(sym, a.interval), sym, now, cfg, a.setup, a.level,
-                                   a.interval, a.or_minutes, a.min_volume_x, cal, data.source, a.tick, master)
-                    result['provider_attempts'] = data.attempts.get((sym, a.interval), [])
-                except (ValueError, OSError) as exc:
-                    result = envelope('entry', now, symbol=sym, status='no-data', reason=str(exc), eligible=False)
-                results.append(result)
-            doc = results[0] if command != 'watchlist' else envelope('entry', now, results=results)
-            if command != 'watchlist' and a.write:
+        if command == 'watch':
+            from .watch import watch
+            simulated = bool(a.replay or (a.as_of and a.csv_path))
+            if simulated and not (a.csv_path and a.as_of):
+                raise ValueError('Replay watch requires --csv and --now')
+            if a.as_of and not simulated and a.max_checks != 1:
+                raise ValueError('Historical watch requires authorized --csv; online watch uses the current clock')
+            def provider(cutoff):
+                source = MarketData(cutoff, a.provider, a.csv_path, a.days, a.instruments, not a.no_fallback, cal)
+                if a.volume_basis == 'opening-range':
+                    source.intraday_range = '1d'
+                rows = source.history(names[0], a.interval)
+                return rows, source.source, source.attempts.get((names[0], a.interval), [])
+            def evaluate(rows, cutoff, source):
+                return entry(rows, names[0], cutoff, cfg, a.setup, a.level, a.interval,
+                             a.or_minutes, a.min_volume_x, cal, source, a.tick, master, a.volume_basis)
+            doc, code = watch(provider, evaluate, now, every=a.every, max_checks=a.max_checks,
+                              max_errors=a.max_errors, replay=simulated,
+                              emit=lambda event: print(json.dumps(event, allow_nan=False), flush=True),
+                              minutes=1 if a.interval == '1m' else 5,
+                              cutoff=dt.time.fromisoformat(cfg['no_entries_after']))
+            if not a.no_write and (a.write or (doc.get('eligible') and code == 0)):
                 write(a.out or w/'entry.json', doc)
-            if command != 'watch' or doc['status'] in ('triggered', 'expired', 'no-data') or check_index+1 == a.max_checks:
-                return doc, 1 if doc.get('status') == 'no-data' else 0
-            print(json.dumps(doc, allow_nan=False), flush=True)
-            time.sleep(a.every)
-            now = clock()
-            data = MarketData(now, a.provider, a.csv_path, a.days, a.instruments, not a.no_fallback, cal)
+            return doc, code
+        results = []
+        for sym in names:
+            try:
+                result = entry(data.history(sym, a.interval), sym, now, cfg, a.setup, a.level,
+                               a.interval, a.or_minutes, a.min_volume_x, cal, data.source, a.tick, master, a.volume_basis)
+                result['provider_attempts'] = data.attempts.get((sym, a.interval), [])
+            except (ValueError, OSError) as exc:
+                result = envelope('entry', now, symbol=sym, status='no-data', reason=str(exc), eligible=False)
+            results.append(result)
+        doc = results[0] if command != 'watchlist' else envelope('entry', now, results=results)
+        if command != 'watchlist' and a.write and not a.no_write:
+            write(a.out or w/'entry.json', doc)
+        return doc, 1 if doc.get('status') == 'no-data' else 0
 
     if role == 'exit':
         if command == 'show':
@@ -310,11 +370,15 @@ def run(role, a):
     if role == 'timemachine':
         if command == 'chart':
             doc = read(a.from_path or w/'timemachine.json')
-            # Bands/sample paths are portable JSON for a chart or spreadsheet.
-            return dict(status=doc['status'], mc=doc.get('mc'), execution_enabled=False), 0
+            from .scenario_chart import render
+            return dict(status=doc['status'], chart=render(doc), mc=doc.get('mc'), execution_enabled=False), 0
         p = read(a.from_path or w/'plan.json')
+        if a.until:
+            p = dict(p, flat_by=a.until)
         require_budget(cfg)
-        return output(timemachine(data.history(p['symbol'], '5m'), p, now, cfg, cal, a.replays, a.seed), 'timemachine.json')
+        doc = timemachine(data.history(p['symbol'], '5m'), p, now, cfg, cal, a.replays, a.seed, a.window)
+        doc['plan'] = {key: p.get(key) for key in ('symbol', 'date', 'entry', 'entry_time', 'stop', 'target', 'flat_by')}
+        return output(doc, 'timemachine.json')
 
     if role == 'budget':
         require_budget(cfg)
@@ -326,6 +390,19 @@ def run(role, a):
             if paper_state is not None and digest(paper_state) != digest(authoritative):
                 raise ValueError('Supplied portfolio differs from authoritative local paper ledger')
             paper_state = authoritative
+        if a.weights or a.targets:
+            from .allocation import allocate
+            if a.weights and a.targets:
+                raise ValueError('Choose --weights or --targets')
+            if a.limit_price is not None:
+                raise ValueError('Allocation uses dated prices; --limit belongs to a single trade plan')
+            if not a.prices:
+                raise ValueError('Weighted allocation requires --prices with dated INR evidence')
+            source = a.targets or a.weights
+            m = upstream('budget')
+            rows = m.parse_weights(m.weights_from_arg(source) if a.weights and '=' in source else read(source))
+            doc = allocate(rows, now, cfg, read(a.prices), paper_state, a.top)
+            return output(doc, 'allocation.json')
         proposal = read(a.from_path or w/'plan.json')
         limit = proposal['entry'] if a.limit_price == 'plan' else a.limit_price
         doc = budget(proposal, now, cfg,portfolio=paper_state,
@@ -423,6 +500,8 @@ def run(role, a):
                     row['symbol'] = a.symbol
                 if kind == 'time':
                     row['at'] = value
+                    if a.before_close:
+                        row['before_close'] = True
                 elif kind == 'pct_move':
                     row.update(pct=float(value), direction=a.direction)
                 else:
@@ -432,6 +511,8 @@ def run(role, a):
                 if a.label:
                     row['label'] = a.label
                 added = [row]
+            if a.before_close and not a.from_plan and not a.opening_bell and a.at is None:
+                raise ValueError('--before-close requires a time alert')
             for row in added:
                 m.validate(row)
                 if any(r['id'] == row['id'] and r != row for r in rules):
@@ -473,15 +554,21 @@ def run(role, a):
                         note='One persisted check; no notification delivery or background process implied'), int(bool(q['errors']))
 
     if role == 'news':
+        from .common import number
+        number(a.move_pct, 'move-pct', zero=True)
         if not names:
             raise ValueError('Supply tickers or build a watchlist')
-        doc, updated = news(names, now, read(w/'state/news.json', {}), a.hours, a.csv_path, a.feed_url, a.announcements, a.all)
+        names_path = Path(a.names) if a.names else w/'instrument-names.json'
+        company_names = read(names_path, {})
+        company_names = company_names.get('names', company_names)
+        doc, updated = news(names, now, read(w/'state/news.json', {}), a.hours, a.csv_path, a.feed_url, a.announcements, a.all, company_names)
         if not a.no_moves:
             price_data = MarketData(now, a.provider, a.prices_csv or a.csv_path, a.days, a.instruments, not a.no_fallback, cal)
             q = quotes(price_data, names, now)
             doc['moves'] = [dict(symbol=symbol, price=info['price'], as_of=info['time'],
                                  previous_completed_session_candle_close=info['prev_close'],
                                  pct=100*(info['price']/info['prev_close']-1) if info['prev_close'] else None,
+                                 flagged=bool(info['prev_close'] and abs(100*(info['price']/info['prev_close']-1)) >= a.move_pct),
                                  source=info['source']) for symbol, info in q['detail'].items()]
             doc['errors'].extend(q['errors'])
             doc['move_note'] = 'Completed-candle changes, not live quotes or official closing-price reconciliation'
@@ -491,10 +578,34 @@ def run(role, a):
         return doc, int(bool(doc['errors']) and not doc['items'])
 
     if role == 'analyst':
-        if not a.filing:
-            raise ValueError('Supply --filing with sourced Indian quarterly financial exports; SEC data does not cover this workflow')
-        doc = financials(a.filing, a.symbol, now)
-        if a.metrics:
+        filing = a.filing or w/'financials'
+        selected = list(dict.fromkeys([a.symbol]+a.items))
+        results, errors = [], []
+        acquisition_cache = {}
+        for symbol in selected:
+            try:
+                source = filing if a.filing or (Path(filing)/(symbol+'.json')).is_file() else None
+                if source is None:
+                    from .nse_filings import collect
+                    names_doc = read(w/'instrument-names.json', {})
+                    names_map = names_doc.get('names', names_doc)
+                    source = collect(symbol, now, a.basis, a.max_filings,
+                                     issuer_name=names_map.get(symbol) if isinstance(names_map, dict) else None,
+                                     cache=acquisition_cache)
+                result = financials(source, symbol, now, a.quarters)
+                results.append(result)
+                if result['status'] != 'AVAILABLE':
+                    errors.append(dict(symbol=symbol, error='No verified quarterly facts found in the bounded official NSE feeds'))
+            except (ValueError, OSError, KeyError, TypeError) as exc:
+                errors.append(dict(symbol=symbol, error=str(exc)))
+        if len(selected) == 1:
+            if not results:
+                raise ValueError(errors[0]['error'])
+            doc = results[0]
+        else:
+            doc = envelope('analyst', now, results=results, errors=errors, requested=len(selected),
+                           analyzed=sum(r['status'] == 'AVAILABLE' for r in results))
+        if a.metrics and not a.no_write:
             write(a.metrics, doc)
         return output(doc, 'metrics.json')
 

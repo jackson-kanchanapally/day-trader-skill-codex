@@ -33,10 +33,12 @@ def _positive(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0
 
 
-def _simulate(days, plan, first_slot, sims, seed, exchange, config):
+def _simulate(days, plan, first_slot, sims, seed, exchange, config, window=2):
     # Whole observed candles preserve within-bar OHLC relationships. Draw from
     # the same time of day +/- two bars, as in the upstream Time Machine.
     until = flatten_slot(plan)
+    if isinstance(window, bool) or not isinstance(window, int) or not 0 <= window <= 10:
+        raise ValueError('window must be an integer from 0..10 bars')
     if not 1 <= first_slot < until <= SESSION_BARS:
         raise ValueError('No remaining completed-bar simulation horizon')
     pool = [[] for _ in range(until)]
@@ -54,7 +56,7 @@ def _simulate(days, plan, first_slot, sims, seed, exchange, config):
         price, outcome, exit_price = entry, None, None
         path = [entry]
         for i in range(first_slot, until):
-            slot = min(until - 1, max(1, i + rng.randint(-2, 2)))
+            slot = i if window == 0 else min(until - 1, max(1, i + rng.randint(-window, window)))
             o, h, lo, c = rng.choice(pool[slot])
             opening, high, low, closing = (price * x for x in (o, h, lo, c))
             if outcome is None:
@@ -75,9 +77,16 @@ def _simulate(days, plan, first_slot, sims, seed, exchange, config):
         if n < 12:
             sample_paths.append(path)
     ordered, net = sorted(terminal), sorted(pnls)
+    lo, hi = ordered[0], ordered[-1]
+    bins = [0]*24
+    for value in terminal:
+        index = min(23, int(24*(value-lo)/(hi-lo))) if hi > lo else 12
+        bins[index] += 1
     return {
         'status': 'AVAILABLE', 'kind': 'SIMULATED_PATHS_NOT_OBSERVED_PRICES',
-        'replays': sims, 'seed': seed, 'window': 2,
+        'replays': sims, 'seed': seed, 'window': window,
+        'hist': dict(lo=lo, hi=hi, bins=bins),
+        'r_at_target': (target-entry)/(entry-stop),
         'bars_left': until - first_slot, 'until': plan.get('flat_by','15:10'),
         'pool_sessions': len(days), 'counts': counts,
         'p_target': counts['target'] / sims, 'p_stop': counts['stop'] / sims,
