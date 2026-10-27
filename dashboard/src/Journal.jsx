@@ -47,7 +47,8 @@ function EquityCurve({ points }) {
 export default function Journal({ refreshToken, onResearch }) {
   const [data, setData] = useState(null),
     [error, setError] = useState(""),
-    [query, setQuery] = useState("");
+    [query, setQuery] = useState(""),
+    [account, setAccount] = useState("auto");
   useEffect(() => {
     const controller = new AbortController();
     let busy = false;
@@ -55,7 +56,7 @@ export default function Journal({ refreshToken, onResearch }) {
       if (busy) return;
       busy = true;
       try {
-        const r = await fetch("/api/journal", {
+        const r = await fetch(`/api/journal?account=${account}`, {
           cache: "no-store",
           signal: controller.signal,
         });
@@ -75,7 +76,7 @@ export default function Journal({ refreshToken, onResearch }) {
       controller.abort();
       clearInterval(timer);
     };
-  }, [refreshToken]);
+  }, [refreshToken, account]);
   const exits = (data?.exits || []).filter((e) =>
     e.symbol.toLowerCase().includes(query.toLowerCase()),
   );
@@ -92,6 +93,7 @@ export default function Journal({ refreshToken, onResearch }) {
             recorded costs.
           </p>
         </div>
+        <label>Paper account<select aria-label="Paper account" value={account} onChange={(e)=>setAccount(e.target.value)}><option value="auto">Automated account</option><option value="manual">Manual tickets</option></select></label>
       </div>
       {error && (
         <p className="notice error" role="alert">

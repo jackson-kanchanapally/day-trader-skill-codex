@@ -6,6 +6,7 @@ from pathlib import Path
 
 from india.data import symbol_name, timestamp
 from workflow.paper import order_hash, validate_portfolio
+from workflow.common import digest
 from .decision import finite
 from .research import inside
 
@@ -25,13 +26,30 @@ def paper_journal(workspace):
             pf = validate_portfolio(json.loads(db.execute('SELECT document FROM state WHERE id=1').fetchone()[0]))
             events = [json.loads(r[0]) for r in db.execute('SELECT document FROM events ORDER BY rowid')]
         approvals = {e['fingerprint']: e for e in events if e.get('status') == 'approved'}
-        fills = [e for e in events if e.get('status') == 'placed']
+        policies = {e['policy_sha256']:e['policy'] for e in events if e.get('status') == 'paper_policy'}
         lots, entries, exits, groups, curve = {}, [], [], {}, []
         net, total_costs, gains, losses, wins = 0., 0., 0., 0., 0
         cash = pf.get('initial_capital')
+        capital_flows, adjustments = 0., []
         if not finite(cash):
             raise ValueError('Missing initial paper capital')
-        for fill in fills:
+        for fill in events:
+            if fill.get('status') == 'capital_adjusted':
+                from automation.capital import validate_request
+                request=validate_request(fill['request'])
+                before=pf['initial_capital']+capital_flows
+                target=request['settings']['risk']['budget']
+                if (fill.get('paper') is not True or fill.get('execution_enabled') is not False
+                        or fill.get('id') != 'capital-change:'+request['id']
+                        or timestamp(fill['at']) < timestamp(request['requested_at'])
+                        or any(l['qty'] for queue in lots.values() for l in queue)
+                        or not all(finite(fill.get(k)) for k in ('from_capital','to_capital','amount'))
+                        or abs(fill['from_capital']-before) > .01 or abs(fill['to_capital']-target) > .01
+                        or abs(fill['amount']-(target-before)) > .01 or cash+fill['amount'] < 0):
+                    raise ValueError('Invalid or unreconciled paper capital adjustment')
+                cash+=fill['amount'];capital_flows+=fill['amount'];adjustments.append(fill)
+                continue
+            if fill.get('status') != 'placed':continue
             if (fill.get('simulation') is not True or fill.get('paper') is not True or fill.get('execution_enabled') is not False
                     or fill.get('side') not in ('buy', 'sell') or not isinstance(fill.get('qty'), int)
                     or isinstance(fill['qty'], bool) or fill['qty'] <= 0
@@ -44,7 +62,18 @@ def paper_journal(workspace):
             if (not approval or approval['order']['symbol'] != fill['symbol'] or approval['order']['side'] != fill['side']
                     or order_hash(approval['order']) != fill['fingerprint'] or int(approval['order']['qty']) != fill['qty']):
                 raise ValueError('Fill is missing its exact paper approval')
+            authorization = approval.get('authorization',{})
+            if authorization:
+                from automation.policy import validate_mandate
+                policy_sha = authorization.get('policy_sha256')
+                policy = policies.get(policy_sha)
+                if authorization.get('kind') != 'STANDING_PAPER_AUTOMATION_POLICY' or not policy or digest(policy) != policy_sha:
+                    raise ValueError('Automatic fill is missing its recorded standing paper policy')
+                validate_mandate(policy)
+                if fill.get('authorization') != authorization or timestamp(fill['observed_at']) < timestamp(fill['at']):
+                    raise ValueError('Automatic fill observation/authorization differs from its policy')
             event = {k: fill[k] for k in ('id', 'symbol', 'side', 'qty', 'price', 'fees', 'at', 'fingerprint')}
+            event.update(authorization_kind=authorization.get('kind','EXACT_USER_TICKET'),outcome=fill.get('outcome'),observed_at=fill.get('observed_at'))
             plan = approval['order'].get('plan', {})
             total_costs += fill['fees']
             cash += fill['qty']*fill['price']-fill['fees'] if fill['side'] == 'sell' else -fill['qty']*fill['price']-fill['fees']
@@ -81,12 +110,16 @@ def paper_journal(workspace):
                 curve.append(dict(at=fill['at'], realized_pnl=net))
         if not finite(pf.get('realized_pnl')) or abs(net-pf['realized_pnl']) > .01 or abs(cash-pf['cash']) > .01:
             raise ValueError('Recorded outcomes do not reconcile to account P&L')
+        if (abs(capital_flows-pf.get('net_capital_flows',0)) > .01
+                or abs(pf.get('funded_capital',pf['initial_capital'])-pf['initial_capital']-capital_flows) > .01):
+            raise ValueError('Capital flows do not reconcile to funded capital')
         actual = {p.get('ticker', p.get('symbol')): p for p in pf.get('positions', [])}
         expected = {symbol: sum(l['qty'] for l in queue) for symbol, queue in lots.items() if any(l['qty'] for l in queue)}
         if {s: p.get('shares', p.get('qty')) for s, p in actual.items()} != expected:
             raise ValueError('Open shares do not reconcile to recorded fills')
         return dict(status='RECORDED', entries=list(reversed(entries)), exits=list(reversed(exits)),
                     positions=pf.get('positions', []), cash=pf['cash'], initial_capital=pf.get('initial_capital'),
+                    funded_capital=pf.get('funded_capital',pf['initial_capital']),net_capital_flows=capital_flows,capital_adjustments=adjustments,
                     realized_pnl=net, total_costs=total_costs, closed_exits=len(exits),
                     win_rate=wins/len(exits)*100 if exits else None,
                     profit_factor=gains/losses if losses else None, average_exit_pnl=net/len(exits) if exits else None,

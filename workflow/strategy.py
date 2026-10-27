@@ -125,7 +125,7 @@ def scan(data, symbols, now, cfg, mode='orb', calendar=None, min_price=0, min_vo
                           workers, max_confirm, eligible_only, batch_size, kwargs)
     if hasattr(data, 'prefetch'):
         data.prefetch(symbols, '1d' if mode == 'daily' else '5m', workers,
-                      current_only=mode == 'orb' and kwargs.get('min_volume_x') is None)
+                      current_only=mode == 'orb' and (kwargs.get('min_volume_x') is None or kwargs.get('volume_basis') == 'opening-range'))
     stage, skipped, candidates = {}, [], []
     if mode == 'orb':
         minutes = kwargs.get('or_minutes', 15)

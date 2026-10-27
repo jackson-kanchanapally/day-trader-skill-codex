@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add an opt-in automatic NSE paper worker with standing-policy authorizations, complete-universe daily scans, ranked entries, observed fills and protective exits.
+- Add restart recovery, process locking, pause/resume, measured equity/P&L, a dedicated dashboard and macOS launchd supervision.
+
 - Reconcile capped scan counts; retain failure diagnostics and captured ORB candles; bind shortlist publication to the daily source selected before fetching.
 - Validate XBRL unit declarations and revisions, refresh filing caches per invocation, show all dashboard coverage exceptions and accept saved planning limits.
 

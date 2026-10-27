@@ -264,7 +264,8 @@ class Ledger:
         self.db.execute('CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, document TEXT NOT NULL)')
         self.db.execute('INSERT OR IGNORE INTO state VALUES (1, ?)', (json.dumps(dict(paper=True, currency='INR', cash=number(capital, 'capital'), initial_capital=number(capital, 'capital'), positions=[], realized_pnl=0)),))
         self.db.commit()
-        starting = self.portfolio().get('initial_capital')
+        pf = self.portfolio()
+        starting = pf.get('funded_capital',pf.get('initial_capital'))
         if starting is not None and abs(starting-float(capital)) > 1e-8:
             self.db.close()
             raise ValueError('This ledger was initialized with different capital; choose a new workspace for a different paper account')
@@ -277,6 +278,37 @@ class Ledger:
 
     def events(self):
         return [json.loads(row[0]) for row in self.db.execute('SELECT document FROM events ORDER BY rowid')]
+
+    def change_capital(self, request, now):
+        """Adjust simulated funding only when flat, retaining original fills/P&L."""
+        from automation.capital import validate_request
+        validate_request(request)
+        if clock(request['requested_at']) > now:
+            raise ValueError('Capital request is in the future')
+        key='capital-change:'+request['id']
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            existing=self.db.execute('SELECT document FROM events WHERE id=?',(key,)).fetchone()
+            if existing:
+                event=json.loads(existing[0])
+                if event.get('request') != request:raise ValueError('Capital request mismatch')
+                return event
+            pf=self.portfolio()
+            if pf['positions']:
+                raise ValueError('Capital can change only after existing positions close')
+            before=pf.get('funded_capital',pf['initial_capital'])
+            after=request['settings']['risk']['budget']
+            amount=after-before
+            if pf['cash']+amount < 0:
+                raise ValueError('Realized losses exceed the requested remaining paper capital')
+            pf['cash']+=amount
+            pf['funded_capital']=after
+            pf['net_capital_flows']=pf.get('net_capital_flows',0)+amount
+            event=dict(id=key,status='capital_adjusted',at=now.isoformat(),request=request,
+                       from_capital=before,to_capital=after,amount=amount,paper=True,execution_enabled=False)
+            self.db.execute('UPDATE state SET document=? WHERE id=1',(json.dumps(pf),))
+            self.db.execute('INSERT INTO events VALUES (?,?)',(key,json.dumps(event)))
+        return event
 
     def state(self):
         return {'orders': self.events()}
@@ -308,7 +340,51 @@ class Ledger:
             raise ValueError('This exact paper ticket already has a recorded decision') from None
         return event
 
-    def fill(self, fp, qty, price, now, cfg, event_id, *, bar=None):
+    def activate_automation(self, policy, now):
+        """Record the user's standing simulated-trading mandate, without a yes reply."""
+        from automation.policy import validate_mandate
+        validate_mandate(policy)
+        fingerprint = digest(policy)
+        key = 'paper-policy:'+fingerprint
+        event = dict(id=key, status='paper_policy', policy=policy, policy_sha256=fingerprint,
+                     at=now.isoformat(), paper=True, execution_enabled=False)
+        with self.db:
+            self.db.execute('INSERT OR IGNORE INTO events VALUES (?, ?)', (key,json.dumps(event)))
+        saved = json.loads(self.db.execute('SELECT document FROM events WHERE id=?',(key,)).fetchone()[0])
+        if saved.get('policy') != policy:
+            raise ValueError('Standing paper policy record differs from its hash')
+        return fingerprint
+
+    def authorize_automation(self, paper_ticket, policy, now, observed_at=None):
+        from automation.policy import validate_mandate
+        cfg = checked_config(**policy['settings']['risk'])
+        validate_mandate(policy, cfg)
+        if (not paper_ticket.get('ready') or paper_ticket.get('execution_enabled') is not False
+                or paper_ticket['fingerprint'] != order_hash(paper_ticket['order'])
+                or paper_ticket.get('config_sha256') != digest(cfg)
+                or not paper_ticket['order']['symbol'].endswith('.NS')
+                or not 0 <= (now-clock(paper_ticket['created_at'])).total_seconds() <= 60):
+            raise ValueError('Automation requires a fresh exact-order risk-approved NSE paper ticket')
+        policy_sha = self.activate_automation(policy,now)
+        if observed_at is not None and (paper_ticket['order'].get('side') != 'sell' or observed_at < now):
+            raise ValueError('Only preplanned protective exits can be recognized after their candle')
+        key = 'approval:'+paper_ticket['fingerprint']
+        event = dict(id=key, status='approved', at=now.isoformat(), date=now.date().isoformat(),
+                     fingerprint=paper_ticket['fingerprint'], order=paper_ticket['order'],
+                     max_loss=paper_ticket.get('max_loss'), portfolio_sha256=digest(self.portfolio()),
+                     calendar_document=paper_ticket.get('calendar_document',DEFAULT_CALENDAR.document),
+                     config_sha256=digest(cfg), authorization=dict(kind='STANDING_PAPER_AUTOMATION_POLICY',
+                     policy_sha256=policy_sha), reply=None)
+        if observed_at is not None:
+            event['observed_at'] = observed_at.isoformat()
+        try:
+            with self.db:
+                self.db.execute('INSERT INTO events VALUES (?, ?)',(key,json.dumps(event)))
+        except sqlite3.IntegrityError:
+            raise ValueError('This exact paper order already has a decision') from None
+        return event
+
+    def fill(self, fp, qty, price, now, cfg, event_id, *, bar=None, observed_at=None):
         checked_config(**cfg)
         q, price = number(qty, 'qty'), number(price, 'price')
         if q != int(q) or not event_id:
@@ -322,6 +398,44 @@ class Ledger:
             if not row:
                 raise ValueError('No explicit user approval for this exact paper order')
             approval = json.loads(row[0])
+            automatic = approval.get('authorization', {}).get('kind') == 'STANDING_PAPER_AUTOMATION_POLICY'
+            if automatic:
+                from automation.policy import validate_mandate
+                policy_sha = approval['authorization']['policy_sha256']
+                policy_row = self.db.execute('SELECT document FROM events WHERE id=?',('paper-policy:'+policy_sha,)).fetchone()
+                if not policy_row:
+                    raise ValueError('Standing paper policy is missing')
+                policy = json.loads(policy_row[0])['policy']
+                validate_mandate(policy,cfg)
+                if digest(policy) != policy_sha:
+                    raise ValueError('Standing paper policy integrity mismatch')
+                if bar is None or observed_at is None or bar.time+dt.timedelta(minutes=5) > observed_at:
+                    raise ValueError('Automatic fills require observed completed candle evidence')
+                if approval['order']['side'] == 'buy':
+                    if now != bar.time or not 0 <= (observed_at-bar.time-dt.timedelta(minutes=5)).total_seconds() <= policy['settings']['max_data_delay_seconds']:
+                        raise ValueError('Entry candle was observed too late; no retrospective entry')
+                else:
+                    from india.execution import exit_fill
+                    proof = approval['order'].get('automation_exit',{})
+                    event = exit_fill(proof.get('plan',{}),bar)
+                    kind = proof.get('outcome')
+                    if kind in ('data_gap_exit','late_flatten'):
+                        if kind == 'data_gap_exit' and not proof.get('missing_bars'):
+                            raise ValueError('Missing-candle liquidation requires explicit gap evidence')
+                        if kind == 'late_flatten' and bar.time+dt.timedelta(minutes=5) < clock(proof['plan']['date']+'T'+proof['plan'].get('flat_by','15:10')+':00+05:30'):
+                            raise ValueError('Late liquidation precedes the planned flatten boundary')
+                        expected = tick_price(bar.open,approval['order']['tick'])
+                    else:
+                        if not event or event['outcome'] != kind:
+                            raise ValueError('Exit differs from canonical stop/target/flatten evidence')
+                        expected = tick_price(event['exit'],approval['order']['tick'])
+                    if abs(price-expected) > 1e-8:
+                        raise ValueError('Automatic exit price differs from observed candle policy')
+                    entry_record = self.db.execute('SELECT document FROM events WHERE id=?',('approval:'+proof.get('entry_fingerprint',''),)).fetchone()
+                    if not entry_record or json.loads(entry_record[0])['order'].get('plan') != proof.get('plan'):
+                        raise ValueError('Protective exit is not bound to its original entry plan')
+            elif observed_at is not None:
+                raise ValueError('Observed automatic fill mode requires a standing paper mandate')
             from india.market import Calendar, session
             if not session(now,Calendar(approval.get('calendar_document',DEFAULT_CALENDAR.document)),exchange_of(approval['order']['symbol'])):
                 raise ValueError('No open sourced exchange session for this fill')
@@ -412,6 +526,11 @@ class Ledger:
                          at=now.isoformat(), date=now.date().isoformat(), kind='entry' if side == 'buy' else 'exit',
                          max_loss=loss if side == 'buy' else approval.get('max_loss'), realized_pnl=pnl,
                          **fill_doc)
+            if automatic:
+                event.update(observed_at=observed_at.isoformat(), authorization=approval['authorization'],
+                             outcome=order.get('automation_exit',{}).get('outcome'),
+                             observed_bar=dict(time=bar.time.isoformat(),open=bar.open,high=bar.high,
+                                               low=bar.low,close=bar.close,volume=bar.volume))
             self.db.execute('UPDATE state SET document=? WHERE id=1', (json.dumps(pf),))
             self.db.execute('INSERT INTO events VALUES (?, ?)', (event_id, json.dumps(event)))
             self.db.execute('INSERT INTO events VALUES (?, ?)', ('filled:'+fp, json.dumps(dict(status='filled', fingerprint=fp))))

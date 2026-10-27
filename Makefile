@@ -1,7 +1,7 @@
 PYTHON ?= python3
 NPM ?= npm
 
-.PHONY: demo test dashboard-build dashboard-dev dashboard release-check release
+.PHONY: demo test dashboard-build dashboard-dev dashboard paper-enable paper-run paper-status release-check release
 
 demo:
 	$(PYTHON) -m india analyze DEMO.NS --csv tests/fixtures/india/synthetic.csv --as-of 2026-10-19T09:35:00+05:30 --tick 0.05 --capital 100000 --risk 500
@@ -18,6 +18,15 @@ dashboard-dev:
 
 dashboard:
 	$(PYTHON) -m dashboard
+
+paper-enable:
+	$(PYTHON) -m automation enable --workspace trader
+
+paper-run:
+	$(PYTHON) -m automation run --workspace trader
+
+paper-status:
+	$(PYTHON) -m automation status --workspace trader
 
 release-check:
 	$(PYTHON) scripts/build_release.py --check

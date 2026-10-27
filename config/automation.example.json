@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "paper": true,
+  "execution_enabled": false,
+  "exchange": "NSE",
+  "enabled": false,
+  "poll_seconds": 15,
+  "workers": 4,
+  "batch_size": 20,
+  "provider": "yahoo",
+  "auto_fallback": false,
+  "risk": {
+    "budget": 100000,
+    "max_loss_per_trade_inr": 500,
+    "max_daily_loss_inr": 1500,
+    "max_trades_per_day": 3,
+    "max_orders_per_day": 12,
+    "max_position_pct": 25,
+    "max_order_inr": 25000,
+    "cash_buffer_pct": 10,
+    "min_reward_risk": 1.5,
+    "no_entries_before": "09:30",
+    "no_entries_after": "14:45",
+    "flat_by": "15:10",
+    "costs": {
+      "slippage_bps": 5
+    }
+  },
+  "selection": {
+    "setups": [
+      "breakout_20d",
+      "bull_flag",
+      "reclaim_ma20",
+      "oversold_bounce"
+    ],
+    "min_price": 50,
+    "min_daily_turnover_inr": 100000000,
+    "min_session_turnover_inr": 10000000,
+    "min_volume_x": 1.2,
+    "max_extension_pct": 10,
+    "min_score": 35,
+    "max_participation": 0.01,
+    "max_open_positions": 3
+  },
+  "exits": {
+    "stop": "or-mid",
+    "target": "2R"
+  },
+  "max_data_delay_seconds": 120,
+  "minimum_daily_coverage": 0.95
+}

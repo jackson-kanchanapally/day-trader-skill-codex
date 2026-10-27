@@ -1,5 +1,15 @@
 # Dashboard decision and research data
 
+The [automatic paper account](AUTOMATION.md) is an explicit standing-policy
+mode. `GET /api/automation` reads its heartbeat, coverage, rankings, positions,
+decisions and reconciled results. Authenticated same-origin
+`POST /api/automation/entries` accepts only boolean `enabled` to pause/resume
+new simulated entries; it does not initialize accounts or change risk limits.
+Protective exits continue during pause. Journal reads select the automatic
+account once configured, with `?account=manual` for the original ledger.
+Standing-policy fills require their recorded policy hash, order and observed
+candle. No endpoint places a live order.
+
 The local dashboard reads saved files. Refreshing the browser does not fetch market
 prices, launch Codex, write an approval or execute an order. These separate states
 appear on every company page:

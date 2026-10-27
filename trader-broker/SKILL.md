@@ -5,6 +5,12 @@ description: Review, approve and record local paper tickets and fills; live orde
 
 Use `ticket.py show` after the exact order passed `trader-risk`. Recheck current portfolio, configuration, tick evidence, prices and entry age. Show one ticket and its estimated risk to the user. Record `approve --reply` only after the user actually supplies an explicit yes for that ticket; never manufacture consent or run approval as part of an unapproved demo.
 
+When the user explicitly requests fully automatic paper trading, use the
+separate [standing-policy worker](../docs/AUTOMATION.md). Confirm the simulated
+capital/risk limits and record its actual policy; the worker obtains exact-order
+risk PASS and records policy authorization without a user-reply string. This
+does not authorize a live broker connector or change manual ticket approval.
+
 ```sh
 python3 /absolute/path/to/trader-broker/ticket.py show --capital 100000 --risk 500 --security-master /path/to/verified-inr-metadata.csv
 python3 /absolute/path/to/trader-broker/ticket.py portfolio --capital 100000

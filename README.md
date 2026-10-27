@@ -5,6 +5,17 @@ entry → exit → Time Machine → budget → risk → paper ticket.
 Independent specialist reviews and the React dashboard are optional additions.
 See the [original-workflow compatibility contract](docs/ORIGINAL_WORKFLOW.md).
 
+An [automatic paper-trading worker](docs/AUTOMATION.md) scans the complete NSE
+stock universe, ranks eligible entries, enforces account limits and manages
+simulated fills, protective exits and end-of-day liquidation without per-trade
+prompts. It records a standing paper policy and measured results after costs.
+The dashboard's **Auto paper trading** view shows its activity and performance.
+
+```sh
+python3 -m automation enable --workspace trader
+python3 -m automation install --workspace trader  # persistent macOS worker
+```
+
 **Experimental, paper-only software. Live order execution is disabled.**
 
 Start with an offline synthetic report. It needs no API key, broker account,
@@ -31,11 +42,13 @@ A numerical setup is separate from independent-team clearance.
 - Check completed-bar entries, choose tick-rounded stops and targets, and size whole-share positions with estimated Indian charges and slippage.
 - Replay historical rules, run holdout research and inspect seeded paper scenarios when sufficient history is available.
 - Maintain a local SQLite paper ledger and persistent price/time alert definitions.
+- Run a supervised automatic paper account with risk checks, restart recovery and recorded P&L.
 - Review supplied issuer financials, dated headlines and public disclosure exports.
 - Coordinate ten independent specialists over frozen evidence and inspect their saved reviews in a local dashboard.
 
-The current universe filter can include ETFs. Discovery does not guarantee candle
-coverage, verify tick units or identify a trade by itself. Price data can be
+The default NSE universe uses the exchange's EQ-series and ETF lists; supplied
+or BSE directories can still include funds. Discovery alone does not guarantee candle
+coverage, verify tick units or identify a trade. Price data can be
 delayed, revised, incomplete or unavailable.
 
 ## Requirements

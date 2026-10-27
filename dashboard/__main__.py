@@ -14,6 +14,7 @@ from .opportunities import OpportunityStore
 from .research import ResearchStore
 from .journal import paper_journal
 from .runner import CodexRunner, RunnerError
+from automation.view import snapshot as automation_snapshot, set_entries
 
 STATIC=Path(__file__).resolve().parent/'dist'
 ORDER=('scanner','news','analyst','entry','exit','timemachine','budget','risk','broker','alerts')
@@ -136,6 +137,7 @@ def handler(root, workspace=None, runner=None):
     workspace=Path(workspace if workspace is not None else Path(root)/'_scanner').resolve()
     research_store=ResearchStore(workspace,root,sessions,session_view)
     opportunity_store=OpportunityStore(workspace,research=research_store)
+    controls_token=runner.token if runner else secrets.token_urlsafe(32)
     class Handler(BaseHTTPRequestHandler):
         def local_host(self):
             return self.headers.get('Host','') in ('127.0.0.1:'+str(self.server.server_port),'localhost:'+str(self.server.server_port))
@@ -147,7 +149,7 @@ def handler(root, workspace=None, runner=None):
             url=urlsplit(self.path).path
             try:
                 if url=='/api/runner':
-                    self.respond(200,runner.state() if runner else dict(available=False, runs=[], active_id=None, error='Direct runs are unavailable on this server.', execution_enabled=False));return
+                    self.respond(200,runner.state() if runner else dict(available=False, token=controls_token, runs=[], active_id=None, error='Direct runs are unavailable on this monitor.', execution_enabled=False));return
                 if url.startswith('/api/runs/') and runner:
                     self.respond(200,runner.detail(unquote(url[len('/api/runs/'):])));return
                 if url=='/api/opportunities':
@@ -157,10 +159,14 @@ def handler(root, workspace=None, runner=None):
                     self.respond(200,opportunity_store.detail(unquote(url[len('/api/opportunities/'):]),query.get('scan',[None])[0]));return
                 if url=='/api/research':
                     self.respond(200,research_store.listing());return
+                if url=='/api/automation':
+                    self.respond(200,automation_snapshot(workspace));return
                 if url.startswith('/api/research/'):
                     self.respond(200,research_store.detail(unquote(url[len('/api/research/'):])));return
                 if url=='/api/journal':
-                    self.respond(200,paper_journal(workspace));return
+                    account=parse_qs(urlsplit(self.path).query).get('account',['auto'])[0]
+                    selected=workspace/'automation' if account!='manual' and (workspace/'automation/settings.json').is_file() else workspace
+                    self.respond(200,dict(paper_journal(selected),account='AUTOMATED_PAPER' if selected!=workspace else 'MANUAL_PAPER'));return
                 if url=='/api/sessions': self.respond(200,dict(sessions=sessions(root)));return
                 if url.startswith('/api/sessions/'):
                     self.respond(200,session_view(root,unquote(url[len('/api/sessions/'):])));return
@@ -173,6 +179,7 @@ def handler(root, workspace=None, runner=None):
                 message=('Saved scan is unavailable or changed. Refresh the opportunities list.' if url.startswith('/api/opportunities') else
                          'Saved research is unavailable, changed or fails evidence binding.' if url.startswith('/api/research') else
                          'Paper ledger is unavailable or failed reconciliation.' if url=='/api/journal' else
+                         'Automatic paper status is unavailable or failed validation.' if url=='/api/automation' else
                          'Session is unavailable, incomplete or changed. Retrying on the next refresh.')
                 self.respond(409,dict(error=message))
 
@@ -182,8 +189,8 @@ def handler(root, workspace=None, runner=None):
             # A page on another origin must not be able to start local work.
             origin = 'http://' + self.headers.get('Host','')
             supplied = self.headers.get('X-Trader-Token','')
-            if (not runner or self.headers.get('Origin') != origin
-                    or not secrets.compare_digest(supplied,runner.token)):
+            if (self.headers.get('Origin') != origin
+                    or not secrets.compare_digest(supplied,controls_token)):
                 self.respond(403,dict(error='Open the local dashboard and retry this action.'));return
             if self.headers.get('Content-Type','').split(';')[0] != 'application/json':
                 self.respond(415,dict(error='JSON request required'));return
@@ -195,6 +202,10 @@ def handler(root, workspace=None, runner=None):
                 if not isinstance(doc,dict):
                     raise RunnerError('Invalid request')
                 url=urlsplit(self.path).path
+                if url=='/api/automation/entries' and set(doc)=={'enabled'}:
+                    self.respond(200,set_entries(workspace,doc['enabled']));return
+                if not runner:
+                    raise RunnerError('Direct Codex runs are disabled on this monitor')
                 if url=='/api/runs' and set(doc)=={'prompt'}:
                     self.respond(202,runner.start(doc['prompt']));return
                 parts=url.split('/')
@@ -230,6 +241,7 @@ def main():
     parser.add_argument('--workspace',default='trader',help='Scanner workspace containing watchlist.json and optional scan snapshots')
     parser.add_argument('--port',type=int,default=8765)
     parser.add_argument('--codex-bin',help='Local Codex executable; defaults to codex on PATH')
+    parser.add_argument('--monitor-only',action='store_true',help='Monitor saved data and control paper entries without opening or modifying Codex runs')
     sub=parser.add_subparsers(dest='command')
     activity=sub.add_parser('activity',help='Coordinator records actual native lifecycle events; never fabricates progress')
     activity.add_argument('--session',required=True)
@@ -241,7 +253,7 @@ def main():
         try: record_activity(args.session,args.role,args.agent_id,args.state)
         except (ValueError,OSError,KeyError,TypeError) as exc: parser.exit(1,str(exc)+'\n')
         return
-    runner=CodexRunner(Path(__file__).resolve().parents[1],args.workspace,args.sessions,args.codex_bin)
+    runner=None if args.monitor_only else CodexRunner(Path(__file__).resolve().parents[1],args.workspace,args.sessions,args.codex_bin)
     try:
         server=ThreadingHTTPServer(('127.0.0.1',args.port),handler(Path(args.sessions).resolve(),Path(args.workspace).resolve(),runner))
     except OSError as exc:
@@ -256,7 +268,7 @@ def main():
     try: server.serve_forever()
     except KeyboardInterrupt: pass
     finally:
-        runner.close()
+        if runner: runner.close()
         server.server_close()
 
 

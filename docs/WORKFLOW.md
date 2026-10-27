@@ -163,11 +163,18 @@ The example is a schema, not verified metadata for any real symbol. Obtain the a
 
 ## Paper records and approvals
 
+The optional [fully automatic paper worker](AUTOMATION.md) uses an explicitly
+authorized standing paper policy and its own ledger under `trader/automation`.
+It retains sizing/risk checks and records policy authorizations without fabricated
+user replies. The per-ticket manual workflow below is separate. Automatic
+observed-candle brackets, flattening and restart recovery are supported in the
+worker; no broker-side bracket or live order exists.
+
 The authoritative ledger is `trader/state/paper.sqlite`, or the corresponding path under `--workspace`. SQLite transactions keep approval, fill, cash and FIFO lots consistent. Initial capital is fixed for that paper account; choose another workspace to start a differently funded account. `portfolio.json` and `state/broker.json` are exports; editing them does not change ledger balances. There is no broker account reconciliation or general external-portfolio import.
 
 `ticket.py show` rechecks the order, configuration, portfolio, fresh completed prices, applicable metadata and signal age. Only an actual user reply beginning with an unambiguous yes for the one shown ticket may be passed to `ticket.py approve --reply ...`. Approval and `fill --fingerprint ... --qty ... --price ... --fill-id ...` record **local simulated events**, never an order. A fill requires the approved full quantity, dated approval, unchanged state/configuration and an explicit tick-aligned simulated price. Buy fills also require `--fill-bar FILE`, an observed OHLCV JSON object with `time,open,high,low,close,volume`; the price must equal the first available candle open at/after approval under the canonical policy. A past signal close cannot stand in for a fill. Duplicate IDs/orders, stale approvals, risk breaches and oversells fail without changing cash.
 
-The ledger's `placed` event label is an internal compatibility label for a **simulated** full fill, with `simulation: true` and `execution_enabled: false`; it is not a brokerage acknowledgement. Partial fills, automatic bracket execution and externally confirmed fills are unsupported. Stop/target alerts provide information; they do not update holdings automatically. Use `flatten` to create a sell proposal, run risk again, then obtain the user's approval before recording a simulated exit.
+The ledger's `placed` event label is an internal compatibility label for a **simulated** full fill, with `simulation: true` and `execution_enabled: false`; it is not a brokerage acknowledgement. Partial fills and externally confirmed fills are unsupported. Standalone alerts do not update holdings. In manual mode, use `flatten`, run risk and obtain approval before recording an exit; the standing-policy worker manages its own simulated protective exits.
 
 Sizing uses `entry_buffer_bps` (default 5) above the signal reference, rounded up to tick. This is a sizing reserve; it is not a second slippage charge. Actual candle-open fills retain the fixed proposed quantity and must pass cost-inclusive risk/cash checks again. Set the reserve explicitly to zero to reproduce the earlier sizing assumption. Slippage remains charged once through the cost model.
 

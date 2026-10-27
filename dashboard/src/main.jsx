@@ -11,6 +11,7 @@ import RequestDialog from "./RequestDialog";
 import RunPanel, { useCodexRunner } from "./RunPanel";
 import Research from "./Research";
 import Journal from "./Journal";
+import Automation from "./Automation";
 
 const names = {
   scanner: "Market scanner",
@@ -219,9 +220,10 @@ function App() {
     opportunities: "Market opportunities",
     research: "Individual research",
     journal: "Trading journal",
+    automation: "Automatic paper trading",
     team: "Agent observatory",
   };
-  const [view, setView] = useState("opportunities"),
+  const [view, setView] = useState(() => window.location.hash === "#automation" ? "automation" : "opportunities"),
     [opportunityRefresh, setOpportunityRefresh] = useState(0),
     [opportunityCount, setOpportunityCount] = useState(null),
     [requestMode, setRequestMode] = useState("review");
@@ -373,6 +375,7 @@ function App() {
         </div>
         <p className="nav-label">WORKSPACE</p>
         <nav>
+          <button className={`nav-item ${view === "automation" ? "selected" : ""}`} onClick={() => setView("automation")}><span>↻</span> Auto paper trading</button>
           <button
             className={`nav-item ${view === "opportunities" ? "selected" : ""}`}
             onClick={() => {
@@ -438,6 +441,7 @@ function App() {
             <option value="opportunities">Opportunities</option>
             <option value="research">Individual research</option>
             <option value="journal">Trading journal</option>
+            <option value="automation">Auto paper trading</option>
             <option value="team">Agent observatory</option>
           </select>
           <span className="breadcrumb">
@@ -475,7 +479,7 @@ function App() {
           </div>
         </header>
         <div className="content" id="overview">
-          {view === "opportunities" ? (
+          {view === "automation" ? <Automation /> : view === "opportunities" ? (
             <Opportunities
               refreshToken={opportunityRefresh}
               onCreateRequest={() => openRequest("scan")}

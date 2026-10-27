@@ -5,6 +5,15 @@ description: Coordinate the original Indian day-trader toolchain or explicitly r
 
 Default to the original modular workflow. Independent specialist reviews are an explicit opt-in addition, not a prerequisite for ordinary scans/research/planning. Use saved configuration plus supplied overrides, show configured assumptions, and ask only for missing required choices; provisional capital-based sizing is an estimate until checked against paper cash. Missing optional research is disclosed rather than automatically vetoing the numerical workflow.
 
+For an explicit request for fully automatic simulated trading, read
+[automatic paper trading](../docs/AUTOMATION.md) and configure the deterministic
+worker using the user's selected paper balance and limits. It scans the full
+NSE universe, ranks fresh filtered entries, validates risk, and manages observed
+paper fills and protective exits under a recorded standing policy. Do not
+manufacture per-ticket yes replies, promise returns, or create simulated agent
+reviews. Independent specialists remain optional; the background worker does
+not require a new model call for every trade.
+
 For the original day-trader workflow, read [Indian workflow commands](../docs/WORKFLOW.md) and use the modular specialist tools in one mutable workspace: scanner → news → entry → exit → timemachine → budget → risk → paper broker, with separate persisted alerts and financial/public-disclosure research. Use the user's provider, capital, risk, verified tick, stop/target choices and as-of time consistently. Require a current exact-order risk PASS before showing a ready paper ticket; obtain actual user consent before any simulated approval/fill. Missing optional research remains visible and must not be described as complete coverage. If the user requires evidence that is unavailable, report the incomplete task. A numerical risk PASS is not independent-team clearance.
 
 The original-style tools restore broad scans, level/ORB entries, configurable stops, polling, persistent alerts and a local paper ledger. They never place orders. Use the detailed role SKILL.md files for their commands. Do not replace a requested configured-rule workflow with the fixed-rule snapshot engine. For a single-role request, invoke that modular skill directly.
