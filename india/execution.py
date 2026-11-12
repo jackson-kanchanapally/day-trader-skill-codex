@@ -162,15 +162,28 @@ def replay_trade(plan: dict, future: list, capital: float, risk: float, exchange
     after an accepted entry raises: an entered exposure cannot be a skipped trade.
     """
     liquidity = liquidity_settings(liquidity_config)
-    if not future:
+
+    def skipped(reason: str, **detail) -> None:
+        # A skipped trade states why, so a run cannot hide a structural block
+        # (for example a 1R target that can never clear costs) as a vague limit.
+        if diagnostics is not None:
+            diagnostics.update(reason=reason, detail=detail or None)
         return None
+
+    if not future:
+        return skipped('NO_LATER_CANDLES')
     minutes = 1 if plan.get('interval') == '1m' else 5
     confirmation = timestamp(plan['signal_time'])+dt.timedelta(minutes=minutes)
     submission = submitted_at or confirmation
     future = [b for b in future if b.time >= submission]
     sized = size_position(plan, capital, risk, exchange, config, buffer_bps)
-    if not sized['qty'] or sized['net_reward_risk'] < min_rr or not future:
-        return None
+    if not sized['qty']:
+        return skipped('ZERO_AFFORDABLE_QUANTITY', capital=capital, risk=risk)
+    if sized['net_reward_risk'] < min_rr:
+        return skipped('NET_REWARD_RISK_BELOW_MINIMUM', net_reward_risk=round(sized['net_reward_risk'], 4),
+                       minimum=min_rr)
+    if not future:
+        return skipped('NO_CANDLES_AFTER_SUBMISSION')
     entry_capacity = None
     if liquidity is not None:
         entry_capacity = capacity(sized['qty'], prior_bar, future[0].time, minutes, liquidity)
@@ -181,8 +194,8 @@ def replay_trade(plan: dict, future: list, capital: float, risk: float, exchange
     try:
         fill = entry_fill(plan, future[0], submission)
         values = validate_fill(plan, fill['entry'], sized['qty'], capital, risk, exchange, config, min_rr)
-    except ValueError:
-        return None
+    except ValueError as error:
+        return skipped('NO_VALID_FILL', error=str(error))
 
     def incomplete(reason: str) -> None:
         if liquidity is not None:

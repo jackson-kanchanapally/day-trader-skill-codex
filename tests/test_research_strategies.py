@@ -147,7 +147,19 @@ class Signals(unittest.TestCase):
         selected,result = self.replay(normalized(require_vwap=True),rows)
         self.assertEqual(selected['index'],3)
         self.assertFalse(result['trades'])
-        self.assertEqual(result['rejection'],'EXECUTION_OR_RISK_LIMIT')
+        # The skip names its cause instead of a generic limit.
+        self.assertEqual(result['rejection'],'NO_VALID_FILL')
+        self.assertIn('no hindsight resizing',result['detail']['error'])
+
+    def test_a_target_that_cannot_clear_costs_is_named(self):
+        # Costs make a 1R target's net reward/risk fall below the 1.0 minimum,
+        # so every 1R trade is skipped; the reason must say so explicitly.
+        selected,_ = self.replay(BASELINE)
+        result = execute(selected,self.rows,'DEMO.NS',.05,100000,500,1,strategy=BASELINE)
+        self.assertFalse(result['trades'])
+        self.assertEqual(result['rejection'],'NET_REWARD_RISK_BELOW_MINIMUM')
+        self.assertLess(result['detail']['net_reward_risk'],1)
+        self.assertEqual(result['detail']['minimum'],1.)
 
     def test_exit_plan_preserves_raw_sub_paise_precision(self):
         rows = [replace(b,open=100.1,high=100.234,low=99.701,close=100.1) for b in self.rows[:3]]+self.rows[3:]

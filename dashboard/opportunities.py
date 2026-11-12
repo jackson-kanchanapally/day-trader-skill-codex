@@ -104,6 +104,11 @@ class OpportunityStore:
             return self._cached
         payload = path.read_bytes()
         doc = json.loads(payload)
+        if path.name == 'watchlist.json' and isinstance(doc, dict) and doc.get('mode') == 'orb':
+            # The scanner writes every scan to watchlist.json. A workspace that
+            # has only run an ORB scan has no daily scan yet; that is the empty
+            # state, not a changed or corrupt daily scan.
+            return None
         if (not isinstance(doc, dict) or doc.get('mode') != 'daily' or doc.get('currency') != 'INR'
                 or doc.get('paper') is not True or doc.get('execution_enabled') is not False):
             raise ValueError('A saved Indian daily scan is required')

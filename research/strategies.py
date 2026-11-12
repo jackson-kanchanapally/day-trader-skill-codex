@@ -242,6 +242,7 @@ def execute(prepared: dict, rows: list, symbol: str, tick: float, capital: float
     trade = replay_trade(p,rows[index+1:],capital,risk,'NSE' if symbol.endswith('.NS') else 'BSE',cost_config,
                          liquidity_config=liquidity_config,prior_bar=rows[index],diagnostics=diagnostics)
     if trade is None:
+        detail = diagnostics.get('capacity', diagnostics.get('detail'))
         return dict(trades=[],net_pnl=0.,rejection=diagnostics.get('reason','EXECUTION_OR_RISK_LIMIT'),
-                    **(dict(detail=diagnostics['capacity']) if diagnostics else {}))
+                    **(dict(detail=detail) if detail is not None else {}))
     return dict(trades=[trade],net_pnl=trade['net_pnl'],rejection=None)

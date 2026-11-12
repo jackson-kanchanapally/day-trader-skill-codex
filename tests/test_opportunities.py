@@ -171,6 +171,19 @@ class Opportunities(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.store.listing()
 
+    def test_orb_only_workspace_is_empty_not_an_error(self):
+        # The scanner writes every scan to watchlist.json; an ORB-only
+        # workspace used to show "Saved scan is unavailable or changed".
+        orb = dict(self.doc, mode='orb')
+        (self.root/'watchlist.json').write_text(json.dumps(orb))
+        listing = OpportunityStore(self.root).listing()
+        self.assertIsNone(listing['scan_id'])
+        self.assertEqual(listing['opportunities'], [])
+        # A daily-watchlist.json that is not a daily scan still fails closed.
+        (self.root/'daily-watchlist.json').write_text(json.dumps(orb))
+        with self.assertRaisesRegex(ValueError, 'daily scan is required'):
+            OpportunityStore(self.root).listing()
+
     def test_empty_workspace_and_http_opportunity_routes(self):
         self.assertEqual(OpportunityStore(self.root/'empty').listing()['opportunities'], [])
         try:
