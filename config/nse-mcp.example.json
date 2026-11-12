@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "nse-bhavcopy": {
+      "transport": "streamable-http",
+      "url": "https://mcp.nseindia.in/bhavcopy/cm/mcp"
+    },
+    "nse-cm-market": {
+      "transport": "streamable-http",
+      "url": "https://mcp.nseindia.in/cmmkt/mcp"
+    }
+  }
+}

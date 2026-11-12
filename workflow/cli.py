@@ -55,7 +55,8 @@ def parser(role):
     add('--config')
     add('--as-of', '--now', dest='as_of', help='ISO cutoff; naive original-style clocks are IST')
     add('--calendar')
-    add('--provider', '--source', choices=['yahoo', 'nse', 'upstox'], default='yahoo')
+    add('--provider', '--source', choices=['yahoo', 'nse', 'nse-mcp', 'upstox'], default='yahoo',
+        help='nse-mcp is the official NSE end-of-day source: daily scans only, no intraday candles')
     add('--csv', '--offline', dest='csv_path', help='OHLCV CSV or saved Yahoo chart JSON (directory accepted)')
     add('--days', type=int, default=60)
     add('--instruments', help='Upstox instrument resolver JSON')
@@ -207,7 +208,10 @@ def market_status(now, cal, exchange):
                 closes=hours[1].strftime('%H:%M') if hours else None, early_close=None, calendar_known=True,
                 next_open=following,next_open_reason=reason,exchange=exchange,timezone='Asia/Kolkata',
                 calendar_source=record.get('sessions',{}).get(now.date().isoformat(),record)['source'],
-                session_event=exchange+':'+now.date().isoformat()+':'+str(hours))
+                # A readable key for once-per-session opening bells, such as
+                # NSE:2026-10-19:09:15-15:30; a closed day has no session.
+                session_event=exchange+':'+now.date().isoformat()+':'+(
+                    '-'.join(t.strftime('%H:%M') for t in hours) if hours else 'closed'))
 
 
 def main(role, argv=None):

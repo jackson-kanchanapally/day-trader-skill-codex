@@ -145,12 +145,19 @@ opening times and exact `.NS`/`.BO` provider symbols.
 | Authorized CSV | `--csv FILE` | Offline input; overrides provider selection |
 | Yahoo | `--provider yahoo` | Unofficial interface; can be delayed or unavailable |
 | NSE website adapter | `--provider nse` | Experimental `.NS` adapter; source terms and access apply |
+| NSE official MCP | `--provider nse-mcp` | Official end-of-day `.NS` bars for daily scans; no intraday candles, unadjusted prices |
 | Upstox V3 | `--provider upstox` | Local token and appropriate account/data access |
 
 Yahoo can fall back to NSE for supported `.NS` snapshots. `--no-fallback`
 disables that choice. Reports preserve provider attempts and use a whole snapshot
 from the chosen source; they do not splice candles or substitute NSE prices for
 BSE stocks. Source availability does not establish permission for a use case.
+
+`--provider nse-mcp` reads NSE's official MCP service without a login. It serves
+daily history only, so opening-range entries still need a five-minute source.
+A split or bonus inside the requested window fails that symbol instead of
+distorting its setups. NSE limits this data to informational, non-commercial
+use. See [NSE official MCP](docs/DATA_SOURCES.md#nse-official-mcp).
 
 [.env.example](.env.example) lists optional credential variable names. The CLI
 reads exported environment variables and does not load `.env` files itself.

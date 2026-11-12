@@ -35,6 +35,30 @@ class Yahoo(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'missing OHLCV.*high'):
             YahooProvider.parse(doc,'DEMO.NS')
 
+    def test_partial_auction_slot_does_not_discard_the_history(self):
+        # Reproduces a live failure: during the closing auction Yahoo sends the
+        # 15:15 slot with some fields empty, which used to reject 60 days.
+        from workflow.data import parse_yahoo
+        day=dt.date.today()-dt.timedelta(days=1)
+        clocks=(dt.time(15,5),dt.time(15,10),dt.time(15,15),dt.time(15,20))
+        starts=[dt.datetime.combine(day,t,IST) for t in clocks]
+        doc={'chart':{'result':[{'meta':{'symbol':'DEMO.NS','currency':'INR','dataGranularity':'5m'},
+             'timestamp':[int(x.timestamp()) for x in starts],
+             'indicators':{'quote':[{'open':[100,101,101,None],'high':[102,103,None,None],
+                'low':[99,100,None,None],'close':[101,102,None,101],'volume':[1000,1200,0,None]}]}}]}}
+        later=dt.datetime.now(IST)
+        for bars in (YahooProvider.parse(doc,'DEMO.NS'),parse_yahoo(doc,'DEMO.NS','5m',later)):
+            self.assertEqual([b.time.time() for b in bars],[dt.time(15,5),dt.time(15,10)])
+        # The same partial values inside continuous trading still fail closed.
+        early=dict(doc)
+        early['chart']={'result':[dict(doc['chart']['result'][0],
+            timestamp=[int(dt.datetime.combine(day,t,IST).timestamp()) for t in
+                       (dt.time(14,55),dt.time(15,0),dt.time(15,5),dt.time(15,10))])]}
+        with self.assertRaisesRegex(ValueError,'missing OHLCV'):
+            YahooProvider.parse(early,'DEMO.NS')
+        with self.assertRaisesRegex(ValueError,'Missing Yahoo OHLCV'):
+            parse_yahoo(early,'DEMO.NS','5m',later)
+
     def test_synthetic_auction_gap_is_outside_strategy_window(self):
         from india.analysis import report, indicators, backtest
         from india.data import timestamp

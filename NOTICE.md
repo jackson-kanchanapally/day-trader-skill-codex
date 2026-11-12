@@ -17,6 +17,7 @@ Relevant provider references include:
 - [NSE Terms of Use](https://www.nseindia.com/static/nse-terms-of-use): restrictions include automated collection and virtual-trading/simulation reuse.
 - [NSE Copyright Policy](https://www.nseindia.com/static/nse-copyright): content permissions and third-party rights are distinct from this repository's software license.
 - [NSE data policy](https://www.nseindia.com/static/market-data/nse-data-policy).
+- [NSE MCP](https://www.nseindia.com/nse-mcp): NSE describes this service as providing website data "for informational purpose only" and not for commercial purposes, real-time trading, investment advice or commercial products. It grants no right to train or fine-tune AI systems. The page defers other conditions to the NSE Terms of Use and states no request quota. Reviewed on 12 November 2026.
 - [Yahoo exchange/data-provider notices](https://help.yahoo.com/kb/SLN2352.html).
 - [Upstox developer documentation](https://upstox.com/developer/api-documentation/).
 

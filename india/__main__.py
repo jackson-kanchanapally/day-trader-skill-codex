@@ -9,6 +9,7 @@ from .data import CSVProvider, YahooProvider, IST, timestamp, symbol_name
 from .analysis import report, backtest, indicators
 from .upstox import UpstoxProvider
 from .nse import NSEProvider
+from .nse_mcp import NSEMCPProvider, SOURCE as NSE_MCP_SOURCE
 from .market import Calendar, DEFAULT_CALENDAR, costs
 from .research import research
 from .operations import health
@@ -19,9 +20,9 @@ def main(argv=None):
     p.add_argument('command',choices=['analyze','backtest','history','research','doctor','replay','team'])
     p.add_argument('symbol',help='NSE/BSE symbol, or stored run ID for replay')
     p.add_argument('--csv')
-    p.add_argument('--provider',choices=['upstox','yahoo','nse'],default='yahoo')
+    p.add_argument('--provider',choices=['upstox','yahoo','nse','nse-mcp'],default='yahoo',help='nse-mcp: official NSE end-of-day bars for the history command only; it has no intraday candles')
     p.add_argument('--instruments',help='Local Upstox instrument master JSON or JSON.gz')
-    p.add_argument('--days',type=int,default=None,help='Calendar-day lookback: team defaults to 60 (Upstox 28), other commands 7; NSE supports 1-120')
+    p.add_argument('--days',type=int,default=None,help='Calendar-day lookback: team defaults to 60 (Upstox 28), other commands 7; NSE supports 1-120, nse-mcp 1-1830')
     p.add_argument('--as-of',help='Explicit historical replay timestamp with timezone')
     p.add_argument('--tick',type=float,help='Verified instrument tick size in INR (required except replay)')
     p.add_argument('--capital',type=float,default=100000)
@@ -29,7 +30,7 @@ def main(argv=None):
     p.add_argument('--rr',type=float,default=2)
     p.add_argument('--cost-config',help='JSON override of cost rates')
     p.add_argument('--calendar',help='Sourced NSE/BSE holiday calendar JSON; replaces built-in coverage')
-    p.add_argument('--fallback-provider',action='append',choices=['upstox','yahoo','nse'],default=[],help='Explicit alternate provider; never mixes candles from snapshots')
+    p.add_argument('--fallback-provider',action='append',choices=['upstox','yahoo','nse','nse-mcp'],default=[],help='Explicit alternate provider; never mixes candles from snapshots')
     p.add_argument('--no-fallback',action='store_true',help='Disable automatic Yahoo-to-NSE fallback for .NS stocks')
     p.add_argument('--record-db','--db',dest='record_db',help='SQLite run archive, or input archive for replay')
     p.add_argument('--train-fraction',type=float,default=.7,help='Chronological research split; no parameter fitting')
@@ -76,6 +77,7 @@ def main(argv=None):
             try:
                 if name == 'csv': source=CSVProvider(a.csv)
                 elif name == 'nse': source=NSEProvider(now,days)
+                elif name == 'nse-mcp': source=NSEMCPProvider(now,days)
                 elif name == 'upstox': source=UpstoxProvider(now,days,a.instruments)
                 else: source=YahooProvider(extended_history=a.command=='team')
                 bars=source.history(a.symbol,'1d' if a.command=='history' else '5m')
@@ -108,11 +110,13 @@ def main(argv=None):
             raise ValueError('; '.join('%s: %s' % (x['provider'],x.get('error','unavailable')) for x in attempts))
         _,result,bars,source,chosen=best
         labels={'nse':'NSE public charting website; availability and freshness not guaranteed',
-                'upstox':'Upstox V3 candles','yahoo':'Yahoo unofficial historical feed; may be delayed'}
+                'upstox':'Upstox V3 candles','yahoo':'Yahoo unofficial historical feed; may be delayed',
+                'nse-mcp':NSE_MCP_SOURCE}
         result.update(source='CSV export' if chosen=='csv' else labels[chosen],historical_replay=bool(a.as_of))
         if len(providers)>1: result['provider_attempts']=attempts
         if isinstance(source, UpstoxProvider): result['instrument_key'] = source.instrument_key
         if isinstance(source, NSEProvider): result['provider_symbol'] = source.provider_symbol
+        if isinstance(source, NSEMCPProvider): result['corporate_actions'] = source.corporate_actions
         if a.command=='doctor': result['elapsed_ms']=round((time.monotonic()-started)*1000,2)
         if a.command=='team':
             from .team import prepare, read_json

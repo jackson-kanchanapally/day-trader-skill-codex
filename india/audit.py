@@ -87,7 +87,7 @@ def replay(path, run_id):
         result={'mode':'historical','bars':encode_bars([b for b in bars if b.time.date()<now.date()])}
     else:
         raise ValueError('This run type does not support numerical replay')
-    for key in ('source','historical_replay','instrument_key','provider_symbol','provider_attempts','elapsed_ms'):
+    for key in ('source','historical_replay','instrument_key','provider_symbol','provider_attempts','elapsed_ms','corporate_actions'):
         if key in payload['result']: result[key]=payload['result'][key]
     matches=canonical(result)==canonical(payload['result'])
     return {'mode':'audit_replay','run_id':run_id,'matches':matches,

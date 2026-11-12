@@ -11,6 +11,11 @@ from dataclasses import dataclass
 from typing import Protocol
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
+# NSE's closing auction starts at 15:15. Candles from then on are auction
+# updates, not continuous trading, and the strategy never uses them. Yahoo can
+# deliver that slot with some fields empty; dropping it must not discard the
+# rest of an otherwise complete history.
+AUCTION_START = dt.time(15, 15)
 
 @dataclass(frozen=True)
 class Bar:
@@ -147,6 +152,8 @@ class YahooProvider:
             if all(v is None for v in values):
                 continue
             if any(v is None for v in values):
+                if intraday and when.time() >= AUCTION_START:
+                    continue  # partial auction-period slot; outside the strategy window
                 missing = ', '.join(k for k, v in zip(columns, values) if v is None)
                 raise ValueError('Provider contains missing OHLCV at %s (%s)' % (when.isoformat(), missing))
             bars.append(Bar(when, *map(float, values)))

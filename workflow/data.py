@@ -12,11 +12,17 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from india.data import Bar, IST, timestamp, validate, symbol_name
+from india.data import AUCTION_START, Bar, IST, timestamp, validate, symbol_name
 from india.nse import NSEProvider
+from india.nse_mcp import NSEMCPProvider, SOURCE as NSE_MCP_SOURCE
 from india.upstox import UpstoxProvider
 from india.market import DEFAULT_CALENDAR, daily_completed
 from india.security import security_master, verify_tick
+
+
+LABELS = {'yahoo': 'Yahoo unofficial; may be delayed',
+          'nse': 'NSE experimental website adapter; provider terms apply',
+          'nse-mcp': NSE_MCP_SOURCE, 'upstox': 'Upstox V3'}
 
 
 def universe(exchange, instruments=None):
@@ -83,10 +89,12 @@ class MarketData:
         self.intraday_range = None
         self._retrieval_attempts = []
         self._last_request = None
-        self._nse, self._upstox = None, None
+        self._nse, self._upstox, self._nse_mcp = None, None, None
         self.auto_fallback, self.calendar = auto_fallback, calendar or DEFAULT_CALENDAR
         self.sources, self.attempts = {}, {}
-        self.source = 'User CSV export' if csv_path else {'yahoo': 'Yahoo unofficial; may be delayed', 'nse': 'NSE experimental website adapter; provider terms apply', 'upstox': 'Upstox V3'}[provider]
+        if not csv_path and provider not in LABELS:
+            raise ValueError('Unsupported candle provider: '+str(provider))
+        self.source = 'User CSV export' if csv_path else LABELS[provider]
 
     def history(self, symbol, interval='5m'):
         symbol_name(symbol)
@@ -229,7 +237,7 @@ class MarketData:
             if rows:
                 usable, missing = self._coverage(rows, symbol, interval)
                 best = ((usable, -missing, len(rows)), rows, self.provider)
-        labels = {'yahoo': 'Yahoo unofficial; may be delayed', 'nse': 'NSE experimental website adapter; provider terms apply', 'upstox': 'Upstox V3'}
+        labels = LABELS
         for name in candidates:
             try:
                 if name == 'yahoo':
@@ -240,6 +248,12 @@ class MarketData:
                     if self._nse is None or self._nse.days != source_days:
                         self._nse = NSEProvider(self.as_of, source_days)
                     rows = self._nse.history(symbol, interval)
+                elif name == 'nse-mcp':
+                    # End-of-day bars only; an intraday request fails explicitly.
+                    # Daily setups need the same three months Yahoo supplies.
+                    if self._nse_mcp is None:
+                        self._nse_mcp = NSEMCPProvider(self.as_of, max(self.days, 90))
+                    rows = self._nse_mcp.history(symbol, interval)
                 else:
                     if self._upstox is None:
                         self._upstox = DirectoryUpstox(self.as_of, min(self.days, 28), self.instruments)
@@ -383,6 +397,8 @@ def parse_yahoo(doc, symbol, interval, as_of, calendar=None):
         if all(v is None for v in values):
             continue  # a gap remains visible to the strategy, never forward fill
         if any(v is None or isinstance(v, bool) for v in values):
+            if interval != '1d' and when.time() >= AUCTION_START:
+                continue  # partial auction-period slot; outside the strategy window
             raise ValueError('Missing Yahoo OHLCV at '+when.isoformat())
         bars.append(Bar(when, *map(float, values)))
     return validate(bars)
