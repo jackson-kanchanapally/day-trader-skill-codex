@@ -9,6 +9,14 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         python: ['3.9', '3.12', '3.14']
+        # ubuntu-latest (26.04) has no Python 3.9 build for setup-python.
+        # Keep the documented 3.9+ support tested on Linux with 24.04.
+        exclude:
+          - os: ubuntu-latest
+            python: '3.9'
+        include:
+          - os: ubuntu-24.04
+            python: '3.9'
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
