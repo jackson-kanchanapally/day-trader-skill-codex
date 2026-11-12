@@ -1,0 +1,4 @@
+interface:
+  display_name: "Chart Scanner"
+  short_description: "Scan NSE/BSE charts for rule-based setups"
+  default_prompt: "Use $trader-scanner to run a daily setup scan on my NSE watchlist and report the matches, candle dates and any failed symbols."

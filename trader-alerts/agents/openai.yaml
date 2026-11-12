@@ -1,0 +1,4 @@
+interface:
+  display_name: "Price Alerts"
+  short_description: "Stop, target, price and time alerts in IST"
+  default_prompt: "Use $trader-alerts to add stop, target and flat-by alerts from my saved plan, then run one check and tell me what rang."

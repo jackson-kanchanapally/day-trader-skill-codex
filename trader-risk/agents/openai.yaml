@@ -1,0 +1,4 @@
+interface:
+  display_name: "Risk Manager"
+  short_description: "PASS or BLOCK for each exact paper order"
+  default_prompt: "Use $trader-risk to check my proposed paper order against my limits using my verified security master, and explain any block."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Earnings Analyst"
+  short_description: "Sourced Indian quarterly results and what changed"
+  default_prompt: "Use $trader-analyst to read the latest sourced quarterly results for TCS.NS and summarise what changed, with the filing sources."

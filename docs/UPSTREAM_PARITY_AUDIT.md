@@ -125,6 +125,13 @@ The local instructions generally disclose foreground watches, manual input
 exports, incomplete RSS, JSON charts and no automatic notification delivery.
 They also add frozen-evidence and source-trust requirements for team reviews.
 
+Update, 12 November 2026: the instructions were rewritten to restore the
+upstream structure (trigger phrases, numbered steps, read/write tables, rules,
+"what it never does" boundaries) with Indian paper-only content and Codex
+paths. `tests/test_skill_instructions.py` restores the upstream instruction
+coverage and parses every printed command with the active parser. Each skill
+now has `agents/openai.yaml`; `$trader-broker` is explicit-invocation only.
+
 `trader-team` is a twelfth, added skill; upstream did not package a native agent
 spawning runtime. Its instructions distinguish the configured modular workflow
 from the fixed range-low sealed numerical engine. The audit read these

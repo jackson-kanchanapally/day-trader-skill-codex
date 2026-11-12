@@ -1,0 +1,4 @@
+interface:
+  display_name: "News Monitor"
+  short_description: "Dated headlines and announcements for watched stocks"
+  default_prompt: "Use $trader-news to check the last 24 hours of headlines and official announcements for TCS.NS and tell me what was published and when."

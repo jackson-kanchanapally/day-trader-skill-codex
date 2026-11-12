@@ -1,0 +1,4 @@
+interface:
+  display_name: "Budget Manager"
+  short_description: "Whole-share sizing to INR capital and max loss"
+  default_prompt: "Use $trader-budget to size my saved plan with ₹1,00,000 capital and a ₹500 maximum loss per trade, and explain which limit decided the size."

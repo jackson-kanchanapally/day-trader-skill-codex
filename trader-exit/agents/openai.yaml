@@ -1,0 +1,4 @@
+interface:
+  display_name: "Exit Planner"
+  short_description: "Stop, target and flat-by time before any entry"
+  default_prompt: "Use $trader-exit to plan the stop and target for the triggered entry, using the opening-range midpoint stop, a 2R target and my verified tick."

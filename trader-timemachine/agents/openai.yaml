@@ -1,0 +1,4 @@
+interface:
+  display_name: "Time Machine"
+  short_description: "Replay a plan on prior sessions before sizing it"
+  default_prompt: "Use $trader-timemachine to replay my saved plan with 10,000 seeded scenarios and tell me the odds, the history and the verdict."

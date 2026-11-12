@@ -1,0 +1,4 @@
+interface:
+  display_name: "Entry Timer"
+  short_description: "Bar-by-bar entry signals on completed candles"
+  default_prompt: "Use $trader-entry to check whether TCS.NS has closed above its opening range, using my verified tick, and tell me the status."

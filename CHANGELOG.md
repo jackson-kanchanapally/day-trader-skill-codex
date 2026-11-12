@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fix Yahoo five-minute history failing completely during and after the closing auction: a partly empty candle at or after 15:15 (outside the strategy window) is now dropped instead of rejecting the whole 60-day snapshot. Partly empty candles during continuous trading still fail.
+- Research replays now name why a trade was skipped (`NET_REWARD_RISK_BELOW_MINIMUM`, `ZERO_AFFORDABLE_QUANTITY`, `NO_VALID_FILL` with its cause) instead of a generic `EXECUTION_OR_RISK_LIMIT`. A 1R target, for example, can never clear costs against the 1.0 minimum.
+- Rewrite all twelve skill instructions after comparing them with the upstream project: trigger phrases in each description, numbered steps, files read and written, rules, explicit "what it never does" boundaries and one shared safety block. Add `agents/openai.yaml` for every skill; `$trader-broker` now runs only when named. A new test parses every printed command with the real tool parser.
+- Show the alert clock's session as `NSE:2026-10-19:09:15-15:30` instead of a Python tuple. An opening-bell alert can ring once more for the session in progress after upgrading.
+
+- Add `--provider nse-mcp`: NSE's official MCP end-of-day history for `.NS` daily scans and the `history` command, with a standard-library Streamable HTTP client, a fail-closed split/bonus check for unadjusted prices and `python3 -m india.nse_mcp` for delayed quotes, corporate actions and tool discovery.
+
 - Reconcile capped scan counts; retain failure diagnostics and captured ORB candles; bind shortlist publication to the daily source selected before fetching.
 - Validate XBRL unit declarations and revisions, refresh filing caches per invocation, show all dashboard coverage exceptions and accept saved planning limits.
 

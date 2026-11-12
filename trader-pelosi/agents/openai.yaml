@@ -1,0 +1,4 @@
+interface:
+  display_name: "Insider Disclosures"
+  short_description: "Supplied public Indian insider disclosure exports"
+  default_prompt: "Use $trader-pelosi to review my supplied public insider disclosure export for TCS.NS and list what is new, with sources."

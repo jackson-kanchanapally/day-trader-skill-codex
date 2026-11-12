@@ -1,0 +1,7 @@
+interface:
+  display_name: "Paper Broker"
+  short_description: "Paper tickets, explicit approval and simulated fills"
+  default_prompt: "Use $trader-broker to show me the paper ticket for my risk-passed order. Do not record an approval unless I reply yes to that exact ticket."
+
+policy:
+  allow_implicit_invocation: false
