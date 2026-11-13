@@ -852,3 +852,119 @@
 .run-reply { margin: 18px 0; }
 .copy-request { width: 100%; margin-top: 8px; background: transparent; border: 0; color: #9cb3c7; padding: 10px; font-size: 11px; }
 @media (max-width: 600px) { .codex-run-panel { right: 16px; bottom: 70px; } .codex-run-toggle { right: 16px; } }
+
+/* Alert trades */
+.alert-trades .panel-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.alert-badge {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  opacity: 0.75;
+}
+.alert-badge.live {
+  color: #fbbf24;
+  opacity: 1;
+}
+.alert-side {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.alert-side.buy {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.12);
+}
+.alert-side.sell {
+  color: #fb7185;
+  background: rgba(251, 113, 133, 0.12);
+}
+.alert-status {
+  font-weight: 600;
+}
+.alert-status.s-open,
+.alert-status.s-waiting {
+  color: #fbbf24;
+}
+.alert-status.s-error {
+  color: #fb7185;
+}
+.alert-trades td > div + div {
+  margin-top: 4px;
+}
+.alert-trades td small {
+  display: block;
+  opacity: 0.7;
+}
+.alert-status.s-lesson-active {
+  color: #fb7185;
+}
+.alert-status.s-lesson-collecting {
+  opacity: 0.7;
+}
+.alert-trades tr.has-why td {
+  border-bottom: 0;
+}
+.alert-trades tr.alert-why td {
+  padding-top: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  opacity: 0.9;
+  white-space: normal;
+}
+.alert-tag {
+  display: inline-block;
+  margin: 2px 4px 0 0;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.alert-tag.good {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.12);
+}
+.alert-tag.bad {
+  color: #fb7185;
+  background: rgba(251, 113, 133, 0.12);
+}
+.alert-lesson-intro {
+  margin: 0 0 12px;
+  font-size: 13px;
+  opacity: 0.8;
+}
+.alert-lesson-active {
+  margin: 0 0 12px;
+  padding-left: 18px;
+}
+.alert-lesson-active b {
+  color: #fb7185;
+}
+.alert-patterns h3 {
+  margin: 16px 0 6px;
+  font-size: 14px;
+}
+.alert-patterns ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.alert-patterns li {
+  margin: 4px 0;
+  opacity: 0.75;
+}
+.alert-patterns li.notable {
+  opacity: 1;
+}
+.alert-patterns small {
+  display: block;
+  margin-top: 6px;
+  opacity: 0.7;
+}

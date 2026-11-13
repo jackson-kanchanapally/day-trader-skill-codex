@@ -27,3 +27,6 @@ htmlcov/
 *.egg-info/
 .idea/
 .vscode/
+
+# Personal daily-alert settings (capital, risk)
+config/picks.json

@@ -30,6 +30,7 @@ A numerical setup is separate from independent-team clearance.
 - Discover an NSE/BSE symbol universe and scan multiple symbols for daily setups or opening-range breakouts.
 - Check completed-bar entries, choose tick-rounded stops and targets, and size whole-share positions with estimated Indian charges and slippage.
 - Replay historical rules, run holdout research and inspect seeded paper scenarios when sufficient history is available.
+- Get the day's top three NSE setups with entry, exit and risk plans as a [Telegram bot alert](docs/TELEGRAM_ALERTS.md) before the open, paper-traded automatically; `docker compose up -d` keeps it and the dashboard running.
 - Maintain a local SQLite paper ledger and persistent price/time alert definitions.
 - Review supplied issuer financials, dated headlines and public disclosure exports.
 - Coordinate ten independent specialists over frozen evidence and inspect their saved reviews in a local dashboard.

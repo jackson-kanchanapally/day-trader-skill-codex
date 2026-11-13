@@ -13,9 +13,23 @@ from india.team import (ARTIFACTS, REQUIRED, VERDICTS, _source_check, load_sessi
 from .opportunities import OpportunityStore
 from .research import ResearchStore
 from .journal import paper_journal
+from india.picks import ledger as alert_ledger, load_config as picks_config
 from .runner import CodexRunner, RunnerError
 
 STATIC=Path(__file__).resolve().parent/'dist'
+REPO=Path(__file__).resolve().parents[1]
+
+
+def picks_settings():
+    """config/picks.json (or the defaults): learning thresholds and state_dir."""
+    config=REPO/'config'/'picks.json'
+    return picks_config(config if config.is_file() else None)
+
+
+def picks_state_dir():
+    """Where india.picks keeps alerts and paper results (config/picks.json state_dir)."""
+    state=Path(picks_settings()['state_dir'])
+    return state if state.is_absolute() else REPO/state
 ORDER=('scanner','news','analyst','entry','exit','timemachine','budget','risk','broker','alerts')
 
 
@@ -132,7 +146,7 @@ def record_activity(directory, role, agent_id, state):
     write_json(path/'activity.json',data)
 
 
-def handler(root, workspace=None, runner=None):
+def handler(root, workspace=None, runner=None, picks_dir=None):
     workspace=Path(workspace if workspace is not None else Path(root)/'_scanner').resolve()
     research_store=ResearchStore(workspace,root,sessions,session_view)
     opportunity_store=OpportunityStore(workspace,research=research_store)
@@ -161,6 +175,8 @@ def handler(root, workspace=None, runner=None):
                     self.respond(200,research_store.detail(unquote(url[len('/api/research/'):])));return
                 if url=='/api/journal':
                     self.respond(200,paper_journal(workspace));return
+                if url=='/api/alert-trades':
+                    self.respond(200,alert_ledger(picks_dir or picks_state_dir(),picks_settings()));return
                 if url=='/api/sessions': self.respond(200,dict(sessions=sessions(root)));return
                 if url.startswith('/api/sessions/'):
                     self.respond(200,session_view(root,unquote(url[len('/api/sessions/'):])));return
@@ -173,6 +189,7 @@ def handler(root, workspace=None, runner=None):
                 message=('Saved scan is unavailable or changed. Refresh the opportunities list.' if url.startswith('/api/opportunities') else
                          'Saved research is unavailable, changed or fails evidence binding.' if url.startswith('/api/research') else
                          'Paper ledger is unavailable or failed reconciliation.' if url=='/api/journal' else
+                         'Alert paper trades are unavailable.' if url=='/api/alert-trades' else
                          'Session is unavailable, incomplete or changed. Retrying on the next refresh.')
                 self.respond(409,dict(error=message))
 
@@ -229,6 +246,7 @@ def main():
     parser.add_argument('--sessions',default='trader/team',help='Directory containing team session folders')
     parser.add_argument('--workspace',default='trader',help='Scanner workspace containing watchlist.json and optional scan snapshots')
     parser.add_argument('--port',type=int,default=8765)
+    parser.add_argument('--host',default='127.0.0.1',help='Bind address. Keep 127.0.0.1 except inside a container whose port is published only on host loopback')
     parser.add_argument('--codex-bin',help='Local Codex executable; defaults to codex on PATH')
     sub=parser.add_subparsers(dest='command')
     activity=sub.add_parser('activity',help='Coordinator records actual native lifecycle events; never fabricates progress')
@@ -243,7 +261,7 @@ def main():
         return
     runner=CodexRunner(Path(__file__).resolve().parents[1],args.workspace,args.sessions,args.codex_bin)
     try:
-        server=ThreadingHTTPServer(('127.0.0.1',args.port),handler(Path(args.sessions).resolve(),Path(args.workspace).resolve(),runner))
+        server=ThreadingHTTPServer((args.host,args.port),handler(Path(args.sessions).resolve(),Path(args.workspace).resolve(),runner))
     except OSError as exc:
         if exc.errno == errno.EADDRINUSE:
             alternate = args.port+1 if args.port < 65535 else 8765

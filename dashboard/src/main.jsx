@@ -11,6 +11,7 @@ import RequestDialog from "./RequestDialog";
 import RunPanel, { useCodexRunner } from "./RunPanel";
 import Research from "./Research";
 import Journal from "./Journal";
+import AlertTrades from "./AlertTrades";
 
 const names = {
   scanner: "Market scanner",
@@ -219,6 +220,7 @@ function App() {
     opportunities: "Market opportunities",
     research: "Individual research",
     journal: "Trading journal",
+    alerts: "Alert trades",
     team: "Agent observatory",
   };
   const [view, setView] = useState("opportunities"),
@@ -396,6 +398,12 @@ function App() {
             <span>▤</span> Trading journal
           </button>
           <button
+            className={`nav-item ${view === "alerts" ? "selected" : ""}`}
+            onClick={() => setView("alerts")}
+          >
+            <span>✉</span> Alert trades
+          </button>
+          <button
             className={`nav-item ${view === "team" ? "selected" : ""}`}
             onClick={() => openTeam()}
           >
@@ -438,6 +446,7 @@ function App() {
             <option value="opportunities">Opportunities</option>
             <option value="research">Individual research</option>
             <option value="journal">Trading journal</option>
+            <option value="alerts">Alert trades</option>
             <option value="team">Agent observatory</option>
           </select>
           <span className="breadcrumb">
@@ -491,6 +500,8 @@ function App() {
               onPrepare={prepareReview}
               refreshToken={opportunityRefresh}
             />
+          ) : view === "alerts" ? (
+            <AlertTrades refreshToken={opportunityRefresh} />
           ) : view === "journal" ? (
             <Journal
               refreshToken={opportunityRefresh}

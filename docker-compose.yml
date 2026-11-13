@@ -1,0 +1,48 @@
+# Always-on local stack:  docker compose up -d --build
+#   dashboard  http://127.0.0.1:8765 (published on host loopback only)
+#   alerts     Telegram morning alert + paper-trade settles (india.picks --serve)
+# Both restart with Docker Desktop. Prerequisites: config/picks.json and
+# var/telegram.env (see docs/TELEGRAM_ALERTS.md). Paper only; no orders.
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile.app
+  image: day-trader-app:local
+  restart: unless-stopped
+  environment:
+    TZ: Asia/Kolkata
+  volumes:
+    - ./var:/app/var            # alert records, paper results, Telegram secrets
+    - ./trader:/app/trader      # existing scanner/research workspace
+    - ./config:/app/config:ro   # config/picks.json and calendars
+  logging:
+    driver: json-file
+    options:
+      max-size: "5m"
+      max-file: "3"
+
+services:
+  dashboard:
+    <<: *app
+    command: ["python", "-m", "dashboard", "--host", "0.0.0.0", "--port", "8765"]
+    ports:
+      # Keep host and container ports equal: the dashboard only accepts
+      # requests addressed to 127.0.0.1:<its port> or localhost:<its port>.
+      - "127.0.0.1:8765:8765"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/api/alert-trades', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  alerts:
+    <<: *app
+    command: ["python", "-m", "india.picks", "--config", "config/picks.json", "--serve"]
+    healthcheck:
+      # The scheduler touches this file every 30 seconds.
+      test: ["CMD", "python", "-c", "import os, sys, time; sys.exit(time.time() - os.path.getmtime('var/state/picks/heartbeat') > 180)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

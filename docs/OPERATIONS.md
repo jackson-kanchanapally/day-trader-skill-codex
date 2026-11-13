@@ -90,7 +90,8 @@ job exits 75. A child deadline is configurable (default 120 seconds, maximum
 Logs are JSON lines in `var/state/paper.jsonl`, rotated at 2 MB with five backups.
 The lock is released by the OS even if the process crashes. Fetch failures that
 produce no snapshot are logged, rather than stored as successful audit runs.
-No external alerts or orders are sent. Connect your own process monitor to the
+This job sends no external alerts or orders; the separate
+[daily Telegram alert](TELEGRAM_ALERTS.md) is opt-in. Connect your own process monitor to the
 exit code/log stream if unattended fault notification is required.
 
 Example crontab entry (edit the path and Python executable for your machine):
