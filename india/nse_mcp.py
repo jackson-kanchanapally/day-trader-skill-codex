@@ -72,12 +72,15 @@ def decode(raw, content_type, identifier):
 
 class MCPSession:
     """One JSON-RPC session with a single pinned NSE endpoint."""
-    def __init__(self, url, timeout=30):
+    def __init__(self, url, timeout=30, attempts=2, recover_expired=True):
         parsed = urllib.parse.urlsplit(url)
         if (parsed.scheme != 'https' or parsed.hostname != HOST or parsed.username
                 or parsed.password or parsed.port not in (None, 443)):
             raise ValueError('NSE MCP endpoint must be an https://%s URL' % HOST)
+        if type(attempts) is not int or not 1 <= attempts <= 2:
+            raise ValueError('NSE MCP attempts must be 1 or 2')
         self.url, self.timeout = url, timeout
+        self.attempts, self.recover_expired = attempts, recover_expired
         self.session_id, self.server, self._serial, self._ready = None, {}, 0, False
 
     def _post(self, message):
@@ -89,7 +92,7 @@ class MCPSession:
         if self._ready:
             headers['MCP-Protocol-Version'] = PROTOCOL
         body = json.dumps(message, allow_nan=False).encode()
-        for attempt in range(2):
+        for attempt in range(self.attempts):
             request = urllib.request.Request(self.url, data=body, headers=headers, method='POST')
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
@@ -108,10 +111,10 @@ class MCPSession:
                     exc.close()
                 if code == 404 and self.session_id:
                     raise _Expired() from None
-                if code not in (429, 500, 502, 503, 504) or attempt:
+                if code not in (429, 500, 502, 503, 504) or attempt == self.attempts - 1:
                     raise ValueError('NSE MCP request failed: HTTP %d' % code) from None
             except (urllib.error.URLError, TimeoutError, OSError):
-                if attempt:
+                if attempt == self.attempts - 1:
                     raise ValueError('NSE MCP network unavailable') from None
             time.sleep(1)
 
@@ -146,6 +149,9 @@ class MCPSession:
         try:
             return self._request(method, params)[0]
         except _Expired:
+            if not self.recover_expired:
+                self.session_id, self._ready = None, False
+                raise ValueError('NSE MCP session expired; retry on a later polling cycle') from None
             # The specification asks clients to start a new session after 404.
             self.open()
             try:

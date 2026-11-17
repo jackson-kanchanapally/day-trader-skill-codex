@@ -15,6 +15,12 @@ payloads from arithmetic sequences. They test parser contracts, IST encoding,
 missing candles, auction exclusion and causal replays without reproducing
 captured prices. Their `fixture` fields and DEMO symbol are deliberate labels.
 Other active tests construct synthetic values in memory and mock network calls.
+`tests/test_recorder.py` generates fictional DEMO prices and cumulative counters
+arithmetically in memory, plus invented index values and Yahoo-style close
+series in the published schemas, to test snapshot gaps, clocks, volume,
+extrema, batching, backoff and restart behavior. Its inputs
+contain no captured exchange responses; live validation summaries stay in the
+ignored `var/` directory and are excluded from the public source profile.
 
 The development checkout may additionally contain historical `trader-*`
 fixtures and `india/tcs-*` captures. Those are not part of the public source

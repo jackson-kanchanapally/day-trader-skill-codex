@@ -78,6 +78,7 @@ DEFAULTS = {
     'events': 'skip',                # skip | flag | off: results/board meetings/ex-dates (india.events)
     'live_updates': True,            # Telegram message when a paper trade triggers, hits T1, exits or is cancelled
     'settle_minutes': 10,            # --serve paper-trade cadence (5-30); live updates arrive this often
+    'recorder': None,                # opt-in delayed snapshot recording; see config/picks.example.json
 }
 INDEX_FILES = {
     'nifty50': 'ind_nifty50list.csv', 'nifty100': 'ind_nifty100list.csv',
@@ -667,6 +668,8 @@ def load_config(path):
     if not isinstance(cfg['settle_minutes'], int) or isinstance(cfg['settle_minutes'], bool) \
             or not 5 <= cfg['settle_minutes'] <= 30:
         raise ValueError('settle_minutes must be a whole number from 5 to 30')
+    from .recorder import settings as recorder_settings
+    cfg['recorder'] = recorder_settings(cfg['recorder'])
     return cfg
 
 
@@ -1252,26 +1255,64 @@ def launchd_settle_plist(label, python, workdir, config, every=600):
             '</dict>\n</plist>\n') % (x(label), args, x(str(workdir)), every, log, log)
 
 
+def make_recorder(cfg, calendar, now_fn=None, dry_run=False):
+    from .recorder import SnapshotRecorder
+
+    def universe():
+        # A diagnostic dry run must not change the ordinary universe cache.
+        if dry_run:
+            import tempfile
+            with tempfile.TemporaryDirectory() as directory:
+                symbols, _, _, warnings = load_universe(cfg, directory)
+        else:
+            symbols, _, _, warnings = load_universe(cfg, cfg['state_dir'])
+        return symbols, warnings
+
+    return SnapshotRecorder(cfg['recorder'], calendar, universe_loader=universe,
+                            now_fn=now_fn, dry_run=dry_run)
+
+
 def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=time.sleep,
-          main_fn=None, iterations=None, log=lambda msg: print(msg, flush=True)):
+          main_fn=None, iterations=None, log=lambda msg: print(msg, flush=True), recorder=None):
     """Long-running scheduler for a container: morning alert + settles every settle_minutes.
 
     The alert runs once per session between alert_time and entry_deadline on NSE
     trading days, retried at most 3 times, 20 minutes apart. Settling runs every
     settle_minutes; it does nothing outside sessions or once a session is scored.
-    A heartbeat file lets the container health check see the loop is alive.
+    The optional recorder shares this loop: one NSE index request per tick and
+    a Yahoo stock-close refresh once per completed five-minute window. A
+    heartbeat file lets the container check the loop.
     """
     main_fn = main_fn or main
     state = Path(cfg['state_dir'])
     state.mkdir(parents=True, exist_ok=True)
-    attempts, last_settle, n = {}, None, 0
+    attempts, last_settle, n, recorder_status = {}, None, 0, {}
     every = dt.timedelta(minutes=cfg['settle_minutes'])
+    own_recorder = recorder is None and (cfg.get('recorder') or {}).get('enabled', False)
+    if own_recorder:
+        recorder = make_recorder(cfg, calendar, now_fn, dry_run='--dry-run' in base_args)
     log('scheduler started: alert %s IST on NSE trading days, settle every %d minutes' % (
         cfg['alert_time'], cfg['settle_minutes']))
     while iterations is None or n < iterations:
         n += 1
         now = now_fn()
         today = now.date()
+        if recorder is not None:
+            for job in (recorder.tick, recorder.stocks_tick):
+                try:
+                    result = job(now)
+                    feed, status = result.get('feed'), result['status']
+                    # An index poll runs every 30 seconds: log it only when its status changes.
+                    quiet = status in ('WAITING', 'OUTSIDE_SESSION', 'DISABLED') or (
+                        feed != 'stocks' and recorder_status.get(feed) == status)
+                    if status not in ('WAITING', 'OUTSIDE_SESSION', 'DISABLED'):
+                        recorder_status[feed] = status
+                    if not quiet:
+                        log('snapshot recorder: %s %s; covered %s/%s%s' % (
+                            status, feed, result.get('covered'), result.get('requested'),
+                            '; %s' % result['error'] if result.get('error') else ''))
+                except Exception as exc:
+                    log('snapshot recorder failed: %s' % exc)
         try:
             trading = calendar.trading_day(today, 'NSE')
         except ValueError:
@@ -1295,6 +1336,8 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
         (state / 'heartbeat').write_text(now.isoformat())
         if iterations is None or n < iterations:
             sleep(30)
+    if own_recorder:
+        recorder.close()
 
 
 def main(argv=None):
@@ -1312,6 +1355,9 @@ def main(argv=None):
     ap.add_argument('--date', help='session to settle, YYYY-MM-DD (default: today)')
     ap.add_argument('--print-launchd-settle', action='store_true', help='print a LaunchAgent plist that settles every settle_minutes')
     ap.add_argument('--serve', action='store_true', help='run forever: morning alert at alert_time and settles every settle_minutes (for Docker)')
+    ap.add_argument('--record-once', action='store_true', help='check one recorder source now; never sends Telegram messages')
+    ap.add_argument('--record-feed', choices=['indices', 'stocks', 'equity'], default='indices',
+                    help='source for --record-once: NSE indices (default), Yahoo stock closes, or the NSE stock snapshot')
     a = ap.parse_args(argv)
     if a.print_launchd or a.print_launchd_settle:
         config = str(Path(a.config or 'config/picks.json').resolve())
@@ -1326,6 +1372,19 @@ def main(argv=None):
     token = chat = None
     try:
         cfg = load_config(a.config)
+        if a.record_once:
+            if a.as_of or a.serve or a.settle or a.test_message:
+                raise ValueError('--record-once uses the actual clock and cannot be combined with --as-of, --serve, --settle or --test-message')
+            calendar = Calendar.load(cfg['calendar']) if cfg['calendar'] else DEFAULT_CALENDAR
+            cfg['recorder'] = dict(cfg['recorder'], enabled=True)
+            recorder = make_recorder(cfg, calendar, dry_run=a.dry_run)
+            try:
+                result = (recorder.stocks_tick(force=True) if a.record_feed == 'stocks'
+                          else recorder.tick(feed=a.record_feed))
+            finally:
+                recorder.close()
+            print(json.dumps(result, allow_nan=False))
+            return 1 if result['status'] in ('UNAVAILABLE', 'NO_USABLE_QUOTES', 'PARTIAL') else 0
         env = dict(read_env_file(a.env_file), **{k: v for k, v in os.environ.items() if k.startswith('TELEGRAM_')})
         token, chat = env.get('TELEGRAM_BOT_TOKEN'), env.get('TELEGRAM_CHAT_ID')
         if not a.dry_run and not (token and chat):
@@ -1339,6 +1398,8 @@ def main(argv=None):
         state = Path(cfg['state_dir'])
         if a.serve:
             base = (['--config', a.config] if a.config else []) + ['--env-file', a.env_file]
+            if a.dry_run:
+                base.append('--dry-run')
             serve(base, cfg, calendar)
             return 0
         if a.settle:

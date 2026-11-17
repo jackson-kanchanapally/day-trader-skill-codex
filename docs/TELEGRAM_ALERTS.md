@@ -132,7 +132,7 @@ results yourself. It never guesses an event.
 | Service | What it does |
 | --- | --- |
 | `dashboard` | The dashboard at http://127.0.0.1:8765, published on host loopback only |
-| `alerts` | `india.picks --serve`: sends the morning alert at `alert_time` (08:45 IST) on NSE trading days, retried up to 3 times; settles paper trades every `settle_minutes` (10), sending in-session updates; sends the 15:40 scorecard |
+| `alerts` | `india.picks --serve`: sends the morning alert at `alert_time` (08:45 IST) on NSE trading days, retried up to 3 times; settles paper trades every `settle_minutes` (10), sending in-session updates; sends the 15:40 scorecard; optionally records delayed stock/index snapshots in the same loop |
 
 ```sh
 docker compose up -d --build     # start, or rebuild after code changes
@@ -327,6 +327,181 @@ standard error, and how many trades a lesson needs to clear the noise. The
 full report goes to `var/state/picks/backtest-latest.json`. Caveats are
 printed with it: today's index list (survivorship bias), prices not adjusted
 for dividends, estimated costs, and no events filter in history.
+
+## Intraday recorder
+
+The optional recorder collects intraday evidence for later playbooks. It
+creates no trade signals and sends no Telegram messages, and it does not
+change the morning alert or its measured record. It uses two free sources and
+standard-library Python only: no broker API, no paid feed.
+
+| Source | What is recorded | Calls |
+| --- | --- | --- |
+| NSE official MCP, `cm_get_live_indices` | Sampled five-minute candles for the configured indices: NIFTY 50, NIFTY BANK, India VIX and 14 sector indices by default | One every `poll_seconds` (30) |
+| Yahoo spark endpoint | Five-minute closes for the stock universe | Once per completed window: one call per 20 symbols, one second apart (10 calls for the NIFTY 200) |
+
+Stocks do not come from NSE because its live stock call returns at most 500
+of about 2,000 rows, with only a symbol-prefix filter. On 17 November 2026 it
+covered 19 to 22 of the 200 NIFTY 200 stocks per call, and no stock window
+came out complete. That snapshot is still available as `"feeds": ["indices",
+"equity"]`, off by default.
+
+### Enable it
+
+Copy the `recorder` object from `config/picks.example.json` into
+`config/picks.json`, set `"enabled": true` and restart the `alerts` service:
+
+```sh
+docker compose up -d --build alerts
+```
+
+The recorder runs inside the existing `--serve` loop; there is no second
+scheduler. It is off in the example config until a full session has been
+checked. Configs without a `recorder` object keep it off.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | false | Turn collection on |
+| `state_dir` | `var/state/recorder` | Where the evidence and status are kept |
+| `feeds` | `["indices"]` | NSE feeds to poll; add `"equity"` for the partial NSE stock snapshot |
+| `poll_seconds` | 30 | Seconds between NSE calls (30–300). With two feeds they alternate |
+| `indices` | NIFTY 50, NIFTY BANK, INDIA VIX and the sector indices | Exact NSE index names to keep |
+| `stock_source` | `yahoo` | `yahoo` records stock closes; `off` records none |
+| `symbols` | empty | Stock universe as `.NS` names; empty uses the alert's universe |
+| `max_age_seconds` | 180 | Oldest NSE sample accepted, and the longest wait before a window is frozen |
+| `timeout_seconds` | 10 | Timeout per request |
+| `max_backoff_seconds` | 900 | Cap on the backoff after failures |
+| `snapshot_limit`, `symbol_filter` | 500, empty | Only for the `equity` feed: row cap and one symbol prefix |
+
+Each source backs off on its own, so a failure on one never pauses another.
+An NSE feed waits 60, 120, 240, 480 and then at most 900 seconds after
+consecutive failures. A failed Yahoo call ends that refresh at once, and the
+next refresh waits 5, 10 and then at most 15 minutes. Nothing is retried
+immediately, calls never run in parallel, and the timing survives a restart.
+Polling follows the sourced NSE calendar, so nothing is requested on holidays
+or outside the session. The recorder shares one loop with the morning alert
+and the paper settles: while a long job runs (a morning scan retried after
+09:15, for example), no index samples are taken. Missed polls are not caught
+up in a burst; those minutes stay missing.
+
+### Keep the machine awake
+
+A sleeping computer records nothing. The recorder, the morning alert, the
+paper-trade updates and the Docker containers all stop while a Mac sleeps,
+and Docker Desktop does not keep it awake. On 17 November 2026 a live check
+ended when the Mac went to sleep at 11:50 IST.
+
+Index samples missed during sleep are gone; those windows are saved as
+incomplete. Stock closes are different: each Yahoo response holds the whole
+session, so the next refresh records the missed windows, with a `known_at`
+that shows they arrived late.
+
+During NSE hours (09:15–15:30 IST), use one of:
+
+- `caffeinate -i -t 23400 &` in a terminal before the open. It holds the Mac
+  awake for six and a half hours, then lets it sleep again.
+- On mains power: **System Settings → Battery → Options → Prevent automatic
+  sleeping on power adapter when the display is off**. Closing the lid still
+  sleeps the Mac unless an external display is attached.
+- An always-on Linux machine running `docker compose up -d`, or
+  `python3 -m india.picks --config config/picks.json --serve`.
+
+### Check a source without Telegram
+
+```sh
+python3 -m india.picks --config config/picks.example.json --record-once --dry-run
+python3 -m india.picks --config config/picks.example.json --record-once --record-feed stocks --dry-run
+```
+
+The first makes one NSE index call. The second makes one Yahoo refresh (10
+calls for the NIFTY 200, about 12 seconds). Each prints coverage, missing and
+rejected instruments and any error. A dry run uses an in-memory database and
+a temporary universe cache, reads no Telegram secrets and saves nothing.
+Omit `--dry-run` to keep the observation. `--record-feed equity` checks the
+NSE stock snapshot.
+
+### What is stored
+
+`var/state/recorder/snapshots.sqlite` holds the normalised index samples,
+every failed call, the scheduler state, the frozen index candles and the stock
+closes. `status.json` shows the latest result per source. Nothing here is part
+of the source release.
+
+**Index candles** are labelled `SAMPLED_DELAYED_SNAPSHOT_5M`,
+`exchange_candle: false`, `paper: true`, `execution_enabled: false`.
+
+- NSE index times have minute precision and trail the clock by one to two
+  minutes. Several samples inside one source minute are normal; the latest
+  one received is the minute's last price.
+- A window is frozen when a sample from after its end arrives, so the close is
+  the last sample of the final minute. If none arrives, it is frozen
+  `max_age_seconds` after the window ends. `known_at` records when. A frozen
+  candle is never rewritten.
+- `complete` is the strict flag: all five source minutes were sampled.
+- `usable` is the flag for a close-based check: the final minute was sampled,
+  at most one minute is missing and the prices are consistent.
+  `missing_minutes` always lists what was not seen.
+- Open and close are the first and last sampled prices. A new day high or low
+  is added to a window only when both samples around it fall inside that
+  window. Index volume is always null.
+- A missed, stale or rejected sample never fills a minute, and nothing is
+  interpolated.
+
+**Stock closes** are labelled `YAHOO_5M_CLOSE`, `close_only: true`,
+`exchange_candle: false`.
+
+- Only windows inside the NSE session that ended at least 20 seconds before
+  the response count. The window in progress and Yahoo's trailing live tick
+  are ignored.
+- A window with no close from Yahoo stays missing.
+- The first close recorded for a window is kept. If a later response shows a
+  different value, the refresh counts it in `revised_closes` and leaves the
+  stored one alone.
+- There is no open, high, low or volume. `fetch_yahoo_5m` in `india/picks.py`
+  returns full candles for one symbol when a playbook needs them.
+
+```python
+from india.recorder import load_candles, load_stock_closes
+day, cutoff = '2026-11-17', '2026-11-17T12:00:00+05:30'
+index_rows = load_candles('var/state/recorder', day, as_of=cutoff, usable_only=True)
+stock_rows = load_stock_closes('var/state/recorder', day, as_of=cutoff)
+```
+
+`as_of` returns only what was known at that time, for causal replays.
+
+With the `equity` feed on, NSE stock candles also carry volume as the change
+in cumulative shares between samples (`volume_exchange_aligned: false`) and
+session VWAP as cumulative value over cumulative shares. A missing baseline
+or a counter reset leaves volume null.
+
+### Live check
+
+On 17 November 2026, 12:30–13:08 IST, both sources ran in memory at the
+`--serve` cadence, with no Telegram messages. Six full windows, 12:35 to
+13:00, were checked:
+
+| Source | Expected | Result |
+| --- | --- | --- |
+| NSE indices (17) | 102 index windows | 68 usable, 34 strictly complete. 70 calls succeeded and one returned HTTP 502. Four windows had at most one missing minute; the first two each missed two. Candles were frozen 22–110 seconds after their window ended. |
+| Yahoo stocks (NIFTY 200) | 1,200 closes | 1,198 recorded, 1,195 within 90 seconds of the window end. 90 calls, no errors. 51 closes differed on a later refresh; the first value was kept. |
+
+The index shortfall comes from the source. NSE's index time has minute
+precision, trails the clock by 20–140 seconds and advances irregularly: in an
+earlier check, two polls a minute apart both showed 12:03 and the next showed
+12:05, so 12:04 could not be sampled at all. Faster polling cannot recover
+such a minute. A full-session run has not been checked.
+
+### Recorder limits
+
+- Yahoo's endpoint is unofficial and undocumented. It can change, rate-limit
+  or lag without notice; the delay seen in one check is not a guarantee.
+- NSE describes its MCP as informational and not for real-time trading. These
+  samples are for local paper research.
+- A usable index candle is a sample of delayed prices, not the exchange's
+  open, high, low and close.
+- Intraday history starts when the recorder starts. Yahoo keeps about 60 days
+  of five-minute candles; nothing here gives years of intraday data.
+- No playbook reads this data yet.
 
 ## Limits
 

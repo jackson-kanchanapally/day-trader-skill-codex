@@ -1,6 +1,6 @@
 # Always-on local stack:  docker compose up -d --build
 #   dashboard  http://127.0.0.1:8765 (published on host loopback only)
-#   alerts     Telegram morning alert + paper-trade settles (india.picks --serve)
+#   alerts     Morning alerts, paper settles and the opt-in intraday recorder (--serve)
 # Both restart with Docker Desktop. Prerequisites: config/picks.json and
 # var/telegram.env (see docs/TELEGRAM_ALERTS.md). Paper only; no orders.
 
@@ -38,6 +38,7 @@ services:
 
   alerts:
     <<: *app
+    # recorder.enabled in picks.json uses this same scheduler and ./var mount.
     command: ["python", "-m", "india.picks", "--config", "config/picks.json", "--serve"]
     healthcheck:
       # The scheduler touches this file every 30 seconds.

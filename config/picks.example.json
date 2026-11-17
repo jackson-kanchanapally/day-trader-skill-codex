@@ -25,5 +25,19 @@
   "learn_max_penalty": 20,
   "events": "skip",
   "live_updates": true,
-  "settle_minutes": 10
+  "settle_minutes": 10,
+  "recorder": {
+    "enabled": false,
+    "state_dir": "var/state/recorder",
+    "feeds": ["indices"],
+    "poll_seconds": 30,
+    "stock_source": "yahoo",
+    "symbols": [],
+    "indices": ["NIFTY 50", "NIFTY BANK", "INDIA VIX", "NIFTY AUTO", "NIFTY FIN SERVICE", "NIFTY FMCG", "NIFTY IT", "NIFTY MEDIA", "NIFTY METAL", "NIFTY PHARMA", "NIFTY PSU BANK", "NIFTY PVT BANK", "NIFTY REALTY", "NIFTY HEALTHCARE", "NIFTY CONSR DURBL", "NIFTY OIL AND GAS", "NIFTY ENERGY"],
+    "max_age_seconds": 180,
+    "timeout_seconds": 10,
+    "max_backoff_seconds": 900,
+    "snapshot_limit": 500,
+    "symbol_filter": ""
+  }
 }
