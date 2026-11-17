@@ -59,9 +59,10 @@ function Lessons({ lessons }) {
       <p className="alert-lesson-intro">
         Each closed paper trade is grouped by how its setup looked at alert
         time. A trait becomes an active lesson after {lessons.min_trades}{" "}
-        trades if it averages −0.25R or worse and is clearly worse than the
-        rest. Active lessons take {lessons.penalty} points off future setups
-        with that trait.
+        trades if it averages −0.25R or worse and is worse than the rest by
+        more than twice the noise (standard error) in that gap. Worse but
+        within the noise shows as “Within noise”. Active lessons take{" "}
+        {lessons.penalty} points off future setups with that trait.
       </p>
       {lessons.active.length > 0 && (
         <ul className="alert-lesson-active">
@@ -106,7 +107,9 @@ function Lessons({ lessons }) {
                         ? `Lesson · −${r.penalty}`
                         : r.status === "collecting"
                           ? "Collecting"
-                          : "No issue"}
+                          : r.status === "unclear"
+                            ? "Within noise"
+                            : "No issue"}
                     </span>
                   </td>
                 </tr>

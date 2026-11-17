@@ -906,7 +906,8 @@
 .alert-status.s-lesson-active {
   color: #fb7185;
 }
-.alert-status.s-lesson-collecting {
+.alert-status.s-lesson-collecting,
+.alert-status.s-lesson-unclear {
   opacity: 0.7;
 }
 .alert-trades tr.has-why td {

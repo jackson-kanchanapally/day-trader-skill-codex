@@ -44,6 +44,7 @@ from pathlib import Path
 
 from .data import IST, Bar, symbol_name
 from .market import DEFAULT_CALENDAR, Calendar, costs, daily_completed
+from . import events as corp_events
 from . import review
 
 DEFAULTS = {
@@ -74,6 +75,9 @@ DEFAULTS = {
     'learn_min_trades': 8,           # closed paper trades with a trait before it can become a lesson
     'learn_penalty': 10,             # points subtracted per active lesson
     'learn_max_penalty': 20,         # cap on the total subtracted from one setup
+    'events': 'skip',                # skip | flag | off: results/board meetings/ex-dates (india.events)
+    'live_updates': True,            # Telegram message when a paper trade triggers, hits T1, exits or is cancelled
+    'settle_minutes': 10,            # --serve paper-trade cadence (5-30); live updates arrive this often
 }
 INDEX_FILES = {
     'nifty50': 'ind_nifty50list.csv', 'nifty100': 'ind_nifty100list.csv',
@@ -151,22 +155,31 @@ def atr_series(bars, n=14):
     return out
 
 
-def features(bars):
-    """Indicator snapshot for the last completed daily bar. Needs >= 60 bars."""
-    if len(bars) < 60:
-        raise ValueError('needs at least 60 completed sessions, got %d' % len(bars))
+def series(bars):
+    """Indicator series over a whole daily history. Every value at index i uses bars[:i + 1] only."""
     closes = [b.close for b in bars]
-    vols = [b.volume for b in bars]
-    last, prev = bars[-1], bars[-2]
-    e20, e50, e200 = ema_series(closes, 20), ema_series(closes, 50), ema_series(closes, 200)
     line, sig, hist = macd_series(closes)
-    rsi = rsi_series(closes)
-    atr = atr_series(bars)
-    avg_vol = sum(vols[-21:-1]) / 20
-    turnover = sum(b.close * b.volume for b in bars[-20:]) / 20
+    return {'ema20': ema_series(closes, 20), 'ema50': ema_series(closes, 50), 'ema200': ema_series(closes, 200),
+            'macd': line, 'signal': sig, 'hist': hist, 'rsi': rsi_series(closes), 'atr': atr_series(bars)}
+
+
+def features(bars, s=None, i=None):
+    """Indicator snapshot for completed daily bar i (default: the last). Needs >= 60 bars up to i.
+
+    Pass s=series(bars) to snapshot many days of one history without recomputing
+    the indicators; the result equals features(bars[:i + 1]).
+    """
+    i = len(bars) - 1 if i is None else i
+    if i + 1 < 60:
+        raise ValueError('needs at least 60 completed sessions, got %d' % (i + 1))
+    s = s or series(bars)
+    e20, line, sig, hist, atr = s['ema20'], s['macd'], s['signal'], s['hist'], s['atr']
+    last, prev = bars[i], bars[i - 1]
+    avg_vol = sum(b.volume for b in bars[i - 20:i]) / 20
+    turnover = sum(b.close * b.volume for b in bars[i - 19:i + 1]) / 20
     crossed = None
-    for back in range(1, 4):   # a crossover within the last three sessions
-        a, b = line[-back - 1] - sig[-back - 1], line[-back] - sig[-back]
+    for back in range(3):   # a crossover within the last three sessions
+        a, b = line[i - back - 1] - sig[i - back - 1], line[i - back] - sig[i - back]
         if a <= 0 < b:
             crossed = 'bullish'
         elif a >= 0 > b:
@@ -181,15 +194,15 @@ def features(bars):
         'volume': last.volume, 'avg_volume': avg_vol,
         'rel_volume': last.volume / avg_vol if avg_vol > 0 else 0.0,
         'avg_turnover': turnover,
-        'ema20': e20[-1], 'ema50': e50[-1], 'ema200': e200[-1], 'ema20_prev5': e20[-6],
-        'macd': line[-1], 'macd_signal': sig[-1], 'macd_hist': hist[-1], 'macd_hist_prev': hist[-2],
+        'ema20': e20[i], 'ema50': s['ema50'][i], 'ema200': s['ema200'][i], 'ema20_prev5': e20[i - 5],
+        'macd': line[i], 'macd_signal': sig[i], 'macd_hist': hist[i], 'macd_hist_prev': hist[i - 1],
         'macd_cross': crossed,
-        'rsi': rsi[-1], 'atr': atr[-1], 'atr_pct': atr[-1] / last.close * 100,
-        'high20': max(b.high for b in bars[-21:-1]), 'low20': min(b.low for b in bars[-21:-1]),
-        'swing_high10': max(b.high for b in bars[-10:]), 'swing_low10': min(b.low for b in bars[-10:]),
+        'rsi': s['rsi'][i], 'atr': atr[i], 'atr_pct': atr[i] / last.close * 100,
+        'high20': max(b.high for b in bars[i - 20:i]), 'low20': min(b.low for b in bars[i - 20:i]),
+        'swing_high10': max(b.high for b in bars[i - 9:i + 1]), 'swing_low10': min(b.low for b in bars[i - 9:i + 1]),
         'pivot': p, 'r1': 2 * p - last.low, 's1': 2 * p - last.high,
         'r2': p + (last.high - last.low), 's2': p - (last.high - last.low),
-        'sessions': len(bars),
+        'sessions': i + 1,
     }
 
 
@@ -467,7 +480,7 @@ def format_pick(i, p):
         '• Plan reward ≈ %s (T1 %s / T2 %s net) · R:R 1:2' % (inr(p['net_plan'], 0), inr(p['net_t1'], 0), inr(p['net_t2'], 0)),
         '• Support %s · Resistance %s' % (inr(p['support']), inr(p['resistance'])),
     ]
-    lines += ['⚠️ %s' % e(flag) for flag in p['flags']]
+    lines += ['%s %s' % ('📅' if flag.startswith(('Board meeting', 'Ex-date')) else '⚠️', e(flag)) for flag in p['flags']]
     for lesson in p.get('lessons') or []:
         lines.append('📚 −%d: %s' % (lesson['penalty'], e(lesson['evidence'])))
     return '\n'.join(lines)
@@ -489,6 +502,14 @@ def format_messages(picks, ctx, cfg):
         ctx['scanned'], ctx['universe'], ctx['qualified'], len(picks)))
     for w in ctx.get('warnings', []):
         head.append('⚠️ ' + html.escape(w))
+    ev = ctx.get('events')
+    if ev and ev.get('checked'):
+        dropped = [s for s in ev['skipped'] if s['score'] >= cfg['min_score']]
+        if dropped:
+            head.append('📅 Skipped for results/events: ' + html.escape('; '.join(
+                '%s (%s)' % (s['symbol'].rsplit('.', 1)[0], s['events'][0]) for s in dropped)))
+        else:
+            head.append('📅 Results, board meetings and ex-dates checked')
     learning = ctx.get('learning')
     if learning and learning['active']:
         head.append('📚 Learning from %d paper trades · %d lesson(s) active%s' % (
@@ -639,6 +660,13 @@ def load_config(path):
     for key, low in (('learn_min_trades', 3), ('learn_penalty', 0), ('learn_max_penalty', 0)):
         if not isinstance(cfg[key], int) or isinstance(cfg[key], bool) or not low <= cfg[key] <= 100:
             raise ValueError('%s must be a whole number from %d to 100' % (key, low))
+    if cfg['events'] not in ('skip', 'flag', 'off'):
+        raise ValueError('events must be "skip", "flag" or "off"')
+    if not isinstance(cfg['live_updates'], bool):
+        raise ValueError('live_updates must be true or false')
+    if not isinstance(cfg['settle_minutes'], int) or isinstance(cfg['settle_minutes'], bool) \
+            or not 5 <= cfg['settle_minutes'] <= 30:
+        raise ValueError('settle_minutes must be a whole number from 5 to 30')
     return cfg
 
 
@@ -683,11 +711,42 @@ def launchd_plist(label, python, workdir, config, hour=8, minute=45):
             '</dict>\n</plist>\n') % (x(label), args, x(str(workdir)), days, log, log)
 
 
-def run(cfg, now, fetch=fetch_yahoo_daily, calendar=None, log=lambda msg: None):
-    """Scan, score and plan. Returns (picks, context). No network besides fetch/universe."""
+def apply_events(evaluated, cfg, signal_day, day, events_fetch=None, now=None):
+    """Drop (events=skip) or flag setups with results, material board meetings or ex-dates.
+
+    Mutates the plans, returns (kept plans, context for the alert, warning or None)."""
+    found, source, warning = corp_events.load(cfg['state_dir'], signal_day, day, events_fetch, now)
+    ctx = {'source': source, 'window': [signal_day.isoformat(), day.isoformat()], 'checked': found is not None,
+           'skipped': [], 'flagged': []}
+    if found is None:
+        return evaluated, ctx, warning
+    hits = corp_events.check([p['symbol'] for p in evaluated], signal_day, day, found)
+    kept = []
+    for p in evaluated:
+        hit = hits.get(p['symbol'])
+        if not hit:
+            kept.append(p)
+            continue
+        p['events'] = hit
+        if hit['block'] and cfg['events'] == 'skip':
+            ctx['skipped'].append({'symbol': p['symbol'], 'score': p['score'], 'events': hit['block']})
+            continue
+        for text in hit['block']:
+            p['flags'].append('%s. Expect a gap past the stop; consider skipping' % text)
+            p['risk_rating'] = 'High'
+        for text in hit['flag']:
+            p['flags'].append(text)
+        ctx['flagged'].append({'symbol': p['symbol'], 'events': hit['block'] + hit['flag']})
+        kept.append(p)
+    return kept, ctx, warning
+
+
+def run(cfg, now, fetch=fetch_yahoo_daily, calendar=None, log=lambda msg: None, events_fetch=None):
+    """Scan, score and plan. Returns (picks, context). Network: fetch, universe and (events) NSE events."""
     calendar = calendar or DEFAULT_CALENDAR
     warnings = list(calendar.coverage_warnings(now.date(), 'NSE'))
     data_day = calendar.last_completed_session(now, 'NSE')
+    day = trade_date(now, calendar)
     learned = (review.lessons(cfg['state_dir'], cfg['learn_min_trades'], cfg['learn_penalty'])
                if cfg['learning'] else None)
     symbols, sectors, source, uw = load_universe(cfg, cfg['state_dir'])
@@ -730,8 +789,17 @@ def run(cfg, now, fetch=fetch_yahoo_daily, calendar=None, log=lambda msg: None):
         evaluated.append(plan)
     if symbols and scanned < 0.8 * len(symbols):
         warnings.append('Only %d of %d symbols had fresh data' % (scanned, len(symbols)))
+    event_ctx = None
+    if cfg['events'] != 'off' and evaluated:
+        evaluated, event_ctx, warning = apply_events(evaluated, cfg, data_day, day, events_fetch, now)
+        if warning:
+            warnings.append(warning)
+        if event_ctx['skipped']:
+            rejects['results or corporate event'] = len(event_ctx['skipped'])
+        log('events: %s; skipped %d, flagged %d' % (event_ctx['source'] or 'unavailable',
+                                                   len(event_ctx['skipped']), len(event_ctx['flagged'])))
     picks = select(evaluated, cfg, sectors)
-    ctx = {'trade_date': trade_date(now, calendar),
+    ctx = {'trade_date': day, 'events': event_ctx,
            'data_date': data_day.isoformat(), 'bias': bias, 'market': market,
            'universe': len(symbols), 'universe_source': source, 'scanned': scanned,
            'qualified': sum(1 for p in evaluated if p['score'] >= cfg['min_score']),
@@ -1066,6 +1134,78 @@ def format_scorecard(doc, book):
     return '\n'.join(lines)
 
 
+UPDATE_MAX_AGE = dt.timedelta(minutes=30)   # older milestones are recorded but not sent (the scorecard covers them)
+
+
+def trade_updates(doc):
+    """Milestones in a settle document: [(key, known_at, text)].
+
+    One message per trade and milestone (entry, t1, exit, skipped,
+    not_triggered), keyed by symbol, so a revised candle never repeats one.
+    known_at is when the milestone became visible: the end of its candle.
+    """
+    out = []
+    seen_at = dt.datetime.fromisoformat(doc['updated_at'])
+    for t in doc['trades']:
+        if t.get('stale') or t['status'] in ('ERROR', 'WAITING', 'NO_DATA'):
+            continue
+        sym, side = t['symbol'], t['side']
+        name = '<b>%s %s</b>' % (html.escape(sym.rsplit('.', 1)[0]), side)
+        if t['status'] in ('SKIPPED', 'NOT_TRIGGERED'):
+            icon, kind = ('⏭', 'skipped') if t['status'] == 'SKIPPED' else ('⌛', 'not_triggered')
+            out.append(('%s|%s' % (sym, kind), seen_at, '%s %s · %s. Plan cancelled.' % (
+                icon, name, html.escape(t.get('note') or kind))))
+            continue
+        events = t.get('events') or []
+        if not events:
+            continue
+        entry = events[0]
+        out.append(('%s|entry' % sym, dt.datetime.fromisoformat(entry['time']),
+                    '%s %s triggered · paper fill %d @ %s (5-min close %s)\n    Stop %s · T1 %s · T2 %s' % (
+                        '🟢' if side == 'BUY' else '🔴', name, entry['qty'], inr(entry['price']), entry['time'][11:16],
+                        inr(t['stop']), inr(t['target1']), inr(t['target2']))))
+        for i, e in enumerate(events[1:], 1):
+            known = dt.datetime.fromisoformat(e['time']) + dt.timedelta(minutes=5)
+            if e['reason'].startswith('Target 1'):
+                out.append(('%s|t1' % sym, known, '🎯 %s hit T1 %s · booked %d · stop moved to entry %s' % (
+                    name, inr(e['price']), e['qty'], inr(entry['price']))))
+            elif i == len(events) - 1 and t['status'] == 'CLOSED':
+                net = t['net_pnl']
+                out.append(('%s|exit' % sym, known, '%s %s %s @ %s · %d share(s) · trade net <b>%s</b> (%+.2fR)' % (
+                    '✅' if net > 0 else '❌' if net < 0 else '➖', name, html.escape(e['reason']).lower(),
+                    inr(e['price']), e['qty'], inr(net, 0), t['r_multiple'] or 0)))
+    return out
+
+
+def notify_updates(cfg, doc, now, token, chat, dry_run, log):
+    """Send milestones not sent before, in one message. Returns the keys sent."""
+    path = Path(cfg['state_dir']) / ('updates-%s.json' % doc['session'])
+    try:
+        sent = set(json.loads(path.read_text()))
+    except (OSError, ValueError, TypeError):
+        sent = set()
+    fresh, quiet = [], []
+    for key, known, text in trade_updates(doc):
+        if key in sent:
+            continue
+        # After the close the scorecard tells the whole story; late milestones only add noise.
+        (quiet if doc['final'] or now - known > UPDATE_MAX_AGE else fresh).append((key, text))
+    if fresh:
+        text = '⏱ <b>Paper trade update · %s IST</b>\n%s\n<i>Simulated on delayed 5-minute candles; no orders placed.</i>' % (
+            now.strftime('%H:%M'), '\n'.join(t for _, t in fresh))
+        if dry_run:
+            print(text)
+            return [k for k, _ in fresh]
+        try:
+            send_telegram(token, chat, text)
+        except (ValueError, OSError) as exc:
+            log('live update not sent (retrying next settle): %s' % exc)
+            fresh = []
+    if not dry_run and (fresh or quiet):
+        path.write_text(json.dumps(sorted(sent | {k for k, _ in fresh + quiet})))
+    return [k for k, _ in fresh]
+
+
 def run_settle(cfg, now, day, calendar, token, chat, dry_run, log):
     try:
         trading = calendar.trading_day(day, 'NSE')
@@ -1083,6 +1223,7 @@ def run_settle(cfg, now, day, calendar, token, chat, dry_run, log):
     if doc is None:
         return {'status': 'SKIPPED', 'reason': 'no alert was sent for this session', 'date': day.isoformat()}
     log('settled %s: %s' % (day, ', '.join('%s %s' % (t['symbol'], t['status']) for t in doc['trades'])))
+    updates = notify_updates(cfg, doc, now, token, chat, dry_run, log) if cfg['live_updates'] else []
     if doc['final']:
         text = format_scorecard(doc, ledger(state, cfg))
         if dry_run:
@@ -1090,7 +1231,7 @@ def run_settle(cfg, now, day, calendar, token, chat, dry_run, log):
         elif token and chat:
             send_telegram(token, chat, text)
             scored.write_text(now.isoformat())
-    return {'status': 'FINAL' if doc['final'] else 'PROVISIONAL', 'date': day.isoformat(),
+    return {'status': 'FINAL' if doc['final'] else 'PROVISIONAL', 'date': day.isoformat(), 'updates': updates,
             'trades': [{k: t.get(k) for k in ('symbol', 'status', 'net_pnl', 'r_multiple')} for t in doc['trades']]}
 
 
@@ -1113,18 +1254,20 @@ def launchd_settle_plist(label, python, workdir, config, every=600):
 
 def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=time.sleep,
           main_fn=None, iterations=None, log=lambda msg: print(msg, flush=True)):
-    """Long-running scheduler for a container: morning alert + 10-minute settles.
+    """Long-running scheduler for a container: morning alert + settles every settle_minutes.
 
     The alert runs once per session between alert_time and entry_deadline on NSE
     trading days, retried at most 3 times, 20 minutes apart. Settling runs every
-    10 minutes; it does nothing outside sessions or once a session is scored.
+    settle_minutes; it does nothing outside sessions or once a session is scored.
     A heartbeat file lets the container health check see the loop is alive.
     """
     main_fn = main_fn or main
     state = Path(cfg['state_dir'])
     state.mkdir(parents=True, exist_ok=True)
     attempts, last_settle, n = {}, None, 0
-    log('scheduler started: alert %s IST on NSE trading days, settle every 10 minutes' % cfg['alert_time'])
+    every = dt.timedelta(minutes=cfg['settle_minutes'])
+    log('scheduler started: alert %s IST on NSE trading days, settle every %d minutes' % (
+        cfg['alert_time'], cfg['settle_minutes']))
     while iterations is None or n < iterations:
         n += 1
         now = now_fn()
@@ -1143,7 +1286,7 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
                     main_fn(base_args)
                 except Exception as exc:          # never let one run kill the service
                     log('alert run crashed: %r' % exc)
-        if last_settle is None or now - last_settle >= dt.timedelta(minutes=10):
+        if last_settle is None or now - last_settle >= every:
             last_settle = now
             try:
                 main_fn(base_args + ['--settle'])
@@ -1167,13 +1310,14 @@ def main(argv=None):
     ap.add_argument('--settle', action='store_true',
                     help='paper-trade the alerts sent for a session on 5-minute candles; after the close, send the scorecard')
     ap.add_argument('--date', help='session to settle, YYYY-MM-DD (default: today)')
-    ap.add_argument('--print-launchd-settle', action='store_true', help='print a LaunchAgent plist that settles every 10 minutes')
-    ap.add_argument('--serve', action='store_true', help='run forever: morning alert at alert_time and settles every 10 minutes (for Docker)')
+    ap.add_argument('--print-launchd-settle', action='store_true', help='print a LaunchAgent plist that settles every settle_minutes')
+    ap.add_argument('--serve', action='store_true', help='run forever: morning alert at alert_time and settles every settle_minutes (for Docker)')
     a = ap.parse_args(argv)
     if a.print_launchd or a.print_launchd_settle:
         config = str(Path(a.config or 'config/picks.json').resolve())
         if a.print_launchd_settle:
-            print(launchd_settle_plist('com.daytrader.picks.settle', sys.executable, os.getcwd(), config))
+            every = load_config(config if Path(config).is_file() else None)['settle_minutes'] * 60
+            print(launchd_settle_plist('com.daytrader.picks.settle', sys.executable, os.getcwd(), config, every))
         else:
             when = hhmm(a.print_launchd)
             print(launchd_plist('com.daytrader.picks', sys.executable, os.getcwd(), config, when.hour, when.minute))
@@ -1240,7 +1384,7 @@ def main(argv=None):
         print(json.dumps({'status': 'FAIL', 'error': str(exc)}))
         # Tell the user the alert failed instead of failing silently.
         try:
-            # The settle job repeats every 10 minutes: log its failures, don't page.
+            # The settle job repeats every few minutes: log its failures, don't page.
             if not a.dry_run and not a.test_message and not a.settle and token and chat:
                 send_telegram(token, chat, '⚠️ Daily trade-setup alert failed: %s' % html.escape(str(exc)))
         except (ValueError, OSError):

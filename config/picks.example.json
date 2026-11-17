@@ -22,5 +22,8 @@
   "learning": true,
   "learn_min_trades": 8,
   "learn_penalty": 10,
-  "learn_max_penalty": 20
+  "learn_max_penalty": 20,
+  "events": "skip",
+  "live_updates": true,
+  "settle_minutes": 10
 }

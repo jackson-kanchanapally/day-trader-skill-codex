@@ -9,17 +9,24 @@ traits()    describes the setup as it looked at ALERT time (RSI stretched, big
             known before the open, so a lesson can act on the next alert.
 lessons()   groups closed paper trades by trait. A trait whose trades lose
             consistently -- at least ``min_trades`` trades, an average at or
-            below ``threshold`` R and clearly worse than trades without it --
-            becomes an ACTIVE lesson (when enough trades WITHOUT the trait exist to compare), and apply() lowers the score of future
-            setups that carry it. Lessons only subtract points; they never add.
+            below ``threshold`` R and worse than trades without it by
+            ``margin`` R AND by two standard errors of that gap -- becomes an
+            ACTIVE lesson (when enough trades WITHOUT the trait exist to
+            compare), and apply() lowers the score of future setups that carry
+            it. A gap inside the noise is 'unclear', not a lesson. Lessons only
+            subtract points; they never add.
             Execution patterns (stops too tight, failed breakouts, gaps) are
             reported as suggestions: changing plan rules needs a backtest first.
 
-Small samples mislead. Nothing becomes active below ``min_trades`` trades, and
-every adjustment is recorded on the alert so it can be audited.
+Small samples mislead: one trade's R typically varies by about 0.8R, so the
+average of 8 trades is still uncertain by roughly +/-0.28R. Nothing becomes
+active below ``min_trades`` trades or inside two standard errors, and every
+adjustment is recorded on the alert so it can be audited. ``python3 -m
+india.picks_backtest`` measures the same traits over years of history.
 """
 import datetime as dt
 import json
+import math
 from collections import Counter
 from pathlib import Path
 
@@ -220,6 +227,19 @@ def _mean(xs):
     return sum(xs) / len(xs) if xs else None
 
 
+def _var_of_mean(xs):
+    """Squared standard error of the mean (sample variance / n); 0 below two values."""
+    if len(xs) < 2:
+        return 0.0
+    m = _mean(xs)
+    return sum((x - m) ** 2 for x in xs) / (len(xs) - 1) / len(xs)
+
+
+def gap_se(group, rest):
+    """Standard error of mean(group) - mean(rest)."""
+    return math.sqrt(_var_of_mean(group) + _var_of_mean(rest))
+
+
 def lessons(state_dir, min_trades=8, penalty=10, threshold=-0.25, margin=0.25):
     trades = closed_trades(state_dir)
     rows = []
@@ -227,23 +247,27 @@ def lessons(state_dir, min_trades=8, penalty=10, threshold=-0.25, margin=0.25):
         group = [t for t in trades if code in t['traits']]
         if not group:
             continue
+        mine = [t['r_multiple'] for t in group]
         rest = [t['r_multiple'] for t in trades if code not in t['traits']]
-        avg, others = _mean([t['r_multiple'] for t in group]), _mean(rest)
+        avg, others = _mean(mine), _mean(rest)
         # Needs a comparison group: if (nearly) every trade has the trait, a loss is the
         # strategy's, not the trait's, and penalising everything would not help ranking.
         comparable = len(rest) >= max(3, min_trades // 2)
-        active = len(group) >= min_trades and avg <= threshold and comparable and avg <= others - margin
+        worse = len(group) >= min_trades and avg <= threshold and comparable and avg <= others - margin
+        se = gap_se(mine, rest) if comparable else None
+        active = worse and others - avg >= 2 * se
+        status = 'active' if active else 'collecting' if len(group) < min_trades else 'unclear' if worse else 'ok'
         rows.append({
             'trait': code, 'label': label, 'trades': len(group),
             'win_rate': round(100 * sum(t['net_pnl'] > 0 for t in group) / len(group), 1),
             'avg_r': round(avg, 2), 'others_avg_r': round(others, 2) if others is not None else None,
             'net_pnl': round(sum(t['net_pnl'] for t in group), 2),
-            'status': 'active' if active else 'collecting' if len(group) < min_trades else 'ok',
-            'penalty': penalty if active else 0,
+            'gap_se': round(se, 2) if se is not None else None,
+            'status': status, 'penalty': penalty if active else 0,
             'evidence': '%s averaged %+.2fR over %d paper trade(s)%s' % (
                 label, avg, len(group), ' (others %+.2fR)' % others if others is not None else ''),
         })
-    order = {'active': 0, 'collecting': 1, 'ok': 2}
+    order = {'active': 0, 'unclear': 1, 'collecting': 2, 'ok': 3}
     rows.sort(key=lambda r: (order[r['status']], r['avg_r'], r['trait']))
     losses = [t for t in trades if t['net_pnl'] < 0]
     counts = Counter(tag for t in losses for tag in (t.get('diagnosis') or {}).get('tags', []) if tag in SUGGESTIONS)

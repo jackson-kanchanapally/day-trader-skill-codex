@@ -40,6 +40,7 @@ def downtrend(n=120):
 
 
 CFG = P.load_config(None)
+NO_EVENTS = lambda start, end: []    # keeps run() offline: no NSE event calendar call
 
 
 class Indicators(unittest.TestCase):
@@ -63,6 +64,12 @@ class Indicators(unittest.TestCase):
     def test_atr_constant_range(self):
         bars = [Bar(dt.datetime(2026, 1, 1, tzinfo=IST) + dt.timedelta(days=i), 100, 102, 98, 100, 1) for i in range(20)]
         self.assertAlmostEqual(P.atr_series(bars)[-1], 4.0)
+
+    def test_features_at_index_equal_a_truncated_history(self):
+        bars = uptrend(260)
+        s = P.series(bars)
+        for i in (59, 150, 259):
+            self.assertEqual(P.features(bars, s, i), P.features(bars[:i + 1]))
 
     def test_features_need_history(self):
         with self.assertRaises(ValueError):
@@ -188,7 +195,7 @@ class Job(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             cfg = dict(CFG, symbols=['AAA.NS', 'BBB.NS'], state_dir=d, workers=1)
             now = dt.datetime(2026, 11, 13, 8, 45, tzinfo=IST)
-            picks, ctx = P.run(cfg, now, fetch=lambda s: data[s])
+            picks, ctx = P.run(cfg, now, fetch=lambda s: data[s], events_fetch=NO_EVENTS)
         self.assertEqual([p['symbol'] for p in picks], ['AAA.NS'])
         self.assertIn('stale', ctx['failed']['BBB.NS'])
         self.assertEqual(ctx['trade_date'], dt.date(2026, 11, 13))
@@ -574,13 +581,13 @@ class Review(unittest.TestCase):
             results(d, '2026-11-10', [closed(-1.0, ['side:BUY'])] * 8 + [dict(closed(0.5, ['side:SELL']), side='SELL')] * 8)
             cfg = dict(CFG, symbols=['AAA.NS'], state_dir=d, workers=1, min_score=0)
             now = dt.datetime(2026, 11, 13, 8, 45, tzinfo=IST)
-            picks, ctx = P.run(cfg, now, fetch=lambda s: good)
+            picks, ctx = P.run(cfg, now, fetch=lambda s: good, events_fetch=NO_EVENTS)
             self.assertEqual(picks[0]['base_score'] - picks[0]['score'], 10)
             self.assertEqual(picks[0]['lessons'][0]['trait'], 'side:BUY')
             text = '\n'.join(P.format_messages(picks, ctx, cfg))
             self.assertIn('📚 Learning from 16 paper trades · 1 lesson(s) active', text)
             self.assertIn('📚 −10: Buy setups averaged -1.00R over 8', text)
-            picks, _ = P.run(dict(cfg, learning=False), now, fetch=lambda s: good)
+            picks, _ = P.run(dict(cfg, learning=False), now, fetch=lambda s: good, events_fetch=NO_EVENTS)
             self.assertEqual(picks[0]['score'], picks[0]['base_score'])
 
     def test_settle_records_diagnosis_and_scorecard_explains(self):
@@ -615,11 +622,11 @@ class Review(unittest.TestCase):
 
 
 class Scheduler(unittest.TestCase):
-    def drive(self, start, minutes, sent_after_first=True, step=1):
+    def drive(self, start, minutes, sent_after_first=True, step=1, **cfg_kw):
         from india.market import DEFAULT_CALENDAR
         calls, clock = [], [start]
         with tempfile.TemporaryDirectory() as d:
-            cfg = dict(CFG, state_dir=d)
+            cfg = dict(CFG, state_dir=d, **cfg_kw)
 
             def fake_main(args):
                 calls.append((clock[0].strftime('%H:%M'), 'settle' if '--settle' in args else 'alert'))
@@ -637,6 +644,10 @@ class Scheduler(unittest.TestCase):
         calls = self.drive(dt.datetime(2026, 11, 13, 8, 40, tzinfo=IST), 30)
         self.assertEqual([c for c in calls if c[1] == 'alert'], [('08:45', 'alert')])
         self.assertEqual([c[0] for c in calls if c[1] == 'settle'], ['08:40', '08:50', '09:00'])
+
+    def test_settle_cadence_follows_settle_minutes(self):
+        calls = self.drive(dt.datetime(2026, 11, 13, 9, 30, tzinfo=IST), 16, settle_minutes=5)
+        self.assertEqual([c[0] for c in calls if c[1] == 'settle'], ['09:30', '09:35', '09:40', '09:45'])
 
     def test_failed_alert_retried_three_times_twenty_minutes_apart(self):
         calls = self.drive(dt.datetime(2026, 11, 13, 8, 45, tzinfo=IST), 120, sent_after_first=False)
@@ -659,6 +670,288 @@ class Scheduler(unittest.TestCase):
                     now_fn=lambda: dt.datetime(2026, 11, 13, 8, 50, tzinfo=IST), sleep=lambda _: None,
                     main_fn=boom, iterations=3, log=lambda m: None)
         self.assertEqual(len(calls), 2)   # one alert attempt + one settle; retries wait 20 minutes
+
+from india import events as EV
+from india import picks_backtest as BT
+
+
+def shifted(bars, last=dt.date(2026, 11, 12)):
+    shift = last - bars[-1].time.date()
+    return [Bar(b.time + shift, b.open, b.high, b.low, b.close, b.volume) for b in bars]
+
+
+CAL_DOC = [
+    {'symbol': 'AAA', 'purpose': 'Financial Results', 'bm_desc': 'Q2 results', 'date': '12-Nov-2026'},
+    {'symbol': 'BBB', 'purpose': 'Other business matters', 'bm_desc': '', 'date': '13-Nov-2026'},
+    {'symbol': 'CCC', 'purpose': 'Financial Results', 'bm_desc': '', 'date': '14-Nov-2026'},
+    {'symbol': 'DDD', 'purpose': 'Fund Raising', 'bm_desc': '', 'date': '11-Nov-2026'},
+    {'symbol': 'EEE', 'date': 'not a date'},
+]
+CA_DOC = [
+    {'symbol': 'FFF', 'series': 'EQ', 'subject': 'Interim Dividend - Rs 5 Per Share', 'exDate': '13-Nov-2026'},
+    {'symbol': 'GGG', 'series': 'EQ', 'subject': 'Face Value Split (Sub-Division) - From Rs 10 To Rs 2', 'exDate': '13-Nov-2026'},
+    {'symbol': 'HHH', 'series': 'EQ', 'subject': 'Bonus 1:1', 'exDate': '12-Nov-2026'},
+    {'symbol': 'III', 'series': 'BE', 'subject': 'Bonus 1:1', 'exDate': '13-Nov-2026'},
+]
+
+
+class Events(unittest.TestCase):
+    signal, day = dt.date(2026, 11, 12), dt.date(2026, 11, 13)
+
+    def events(self):
+        return EV.parse_calendar(CAL_DOC) + EV.parse_actions(CA_DOC)
+
+    def test_parse_skips_malformed_rows_and_other_series(self):
+        found = self.events()
+        self.assertEqual(sorted(e['symbol'] for e in found), ['AAA', 'BBB', 'CCC', 'DDD', 'FFF', 'GGG', 'HHH'])
+        with self.assertRaises(ValueError):
+            EV.parse_calendar({'error': 'x'})
+
+    def test_window_and_classification(self):
+        syms = [x + '.NS' for x in ('AAA', 'BBB', 'CCC', 'DDD', 'FFF', 'GGG', 'HHH', 'ZZZ')]
+        hits = EV.check(syms, self.signal, self.day, self.events())
+        # Results on the signal day block; after the trade day or before the signal day they do not count.
+        self.assertEqual(hits['AAA.NS']['block'], ['Board meeting 12 Nov: Financial Results'])
+        self.assertEqual(hits['BBB.NS'], {'block': [], 'flag': ['Board meeting 13 Nov: Other business matters']})
+        self.assertNotIn('CCC.NS', hits)
+        self.assertNotIn('DDD.NS', hits)
+        # Ex-dates count on the trade day only: a dividend is flagged, a split blocks.
+        self.assertEqual(hits['FFF.NS']['flag'], ['Ex-date 13 Nov: Interim Dividend - Rs 5 Per Share'])
+        self.assertTrue(hits['GGG.NS']['block'])
+        self.assertNotIn('HHH.NS', hits)
+
+    def test_fetch_queries_both_sources_for_the_window(self):
+        urls = []
+
+        def get(url):
+            urls.append(url)
+            return CAL_DOC if 'event-calendar' in url else CA_DOC
+        self.assertEqual(len(EV.fetch(self.signal, self.day, get=get)), 7)
+        self.assertTrue(all('from_date=12-11-2026&to_date=13-11-2026' in u for u in urls))
+
+    def test_cache_used_only_when_it_covers_the_window(self):
+        with tempfile.TemporaryDirectory() as d:
+            found, source, warning = EV.load(d, self.signal, self.day, lambda a, b: self.events())
+            self.assertEqual((len(found), warning), (7, None))
+
+            def down(a, b):
+                raise OSError('timed out')
+            found, source, warning = EV.load(d, self.signal, self.day, down)
+            self.assertEqual(len(found), 7)
+            self.assertIn('using the calendar fetched', warning)
+            found, source, warning = EV.load(d, self.signal, dt.date(2026, 11, 16), down)
+            self.assertIsNone(found)
+            self.assertIn('check each stock for results', warning)
+
+    def run_with(self, mode, events_fetch):
+        good = shifted(uptrend())
+        with tempfile.TemporaryDirectory() as d:
+            cfg = dict(CFG, symbols=['AAA.NS'], state_dir=d, workers=1, events=mode)
+            now = dt.datetime(2026, 11, 13, 8, 45, tzinfo=IST)
+            picks, ctx = P.run(cfg, now, fetch=lambda s: good, events_fetch=events_fetch)
+            return picks, ctx, '\n'.join(P.format_messages(picks, ctx, cfg))
+
+    def test_run_skips_a_stock_with_results(self):
+        picks, ctx, text = self.run_with('skip', lambda a, b: EV.parse_calendar(CAL_DOC))
+        self.assertEqual(picks, [])
+        self.assertEqual(ctx['rejects']['results or corporate event'], 1)
+        self.assertIn('📅 Skipped for results/events: AAA (Board meeting 12 Nov: Financial Results)', text)
+
+    def test_run_flags_instead_when_configured(self):
+        picks, ctx, text = self.run_with('flag', lambda a, b: EV.parse_calendar(CAL_DOC))
+        self.assertEqual(picks[0]['risk_rating'], 'High')
+        self.assertIn('📅 Board meeting 12 Nov: Financial Results. Expect a gap past the stop', text)
+
+    def test_run_without_events_checks_and_says_so(self):
+        picks, ctx, text = self.run_with('skip', lambda a, b: [])
+        self.assertEqual(len(picks), 1)
+        self.assertIn('📅 Results, board meetings and ex-dates checked', text)
+
+        def down(a, b):
+            raise OSError('timed out')
+        picks, ctx, text = self.run_with('skip', down)
+        self.assertEqual(len(picks), 1)
+        self.assertIn('Results/events calendar unavailable', text)
+        self.assertNotIn('checked', text)
+        picks, ctx, _ = self.run_with('off', down)
+        self.assertIsNone(ctx['events'])
+
+    def test_config_validation(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'c.json'
+            for bad in ({'events': 'maybe'}, {'live_updates': 1}, {'settle_minutes': 2}, {'settle_minutes': 7.5}):
+                path.write_text(json.dumps(bad))
+                with self.assertRaises(ValueError):
+                    P.load_config(str(path))
+
+
+def upto(rows, now):
+    return [b for b in session(rows) if b[0] + dt.timedelta(minutes=5) <= now]
+
+
+RUN_UP = TRIGGER + [('09:30', 100.2, 100.6, 100.1, 100.5), ('09:35', 100.5, 100.8, 100.4, 100.7),
+                    ('09:40', 100.7, 101.2, 100.6, 101.1)] + flat('09:45', '10:30', 101.1) + \
+    [('10:30', 101.1, 101.2, 100.0, 100.1)] + flat('10:35', '15:30', 100.1)
+
+
+class LiveUpdates(unittest.TestCase):
+    def settle_at(self, d, hhmm_, rows=RUN_UP):
+        now = dt.datetime.combine(dt.date(2026, 11, 13), dt.time.fromisoformat(hhmm_), IST)
+        return now, P.settle(dict(CFG, state_dir=d), dt.date(2026, 11, 13), now,
+                             fetch=lambda s, day, now_: upto(rows, now))
+
+    def notify(self, d, now, doc, send):
+        with mock.patch.object(P, 'send_telegram', send):
+            return P.notify_updates(dict(CFG, state_dir=d), doc, now, 't', 'c', False, lambda m: None)
+
+    def test_each_milestone_once_and_nothing_after_the_close(self):
+        sent = []
+        send = lambda token, chat, text: sent.append(text)
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / 'picks-2026-11-13.json').write_text(json.dumps({'trade_date': '2026-11-13', 'picks': [plan()]}))
+            now, doc = self.settle_at(d, '09:41')
+            self.assertEqual(self.notify(d, now, doc, send), ['DEMO.NS|entry'])
+            self.assertIn('<b>DEMO BUY</b> triggered · paper fill 10 @ ₹100.20 (5-min close 09:30)', sent[0])
+            self.assertEqual(self.notify(d, now, doc, send), [])        # same milestone: no repeat
+            now, doc = self.settle_at(d, '09:51')
+            self.assertEqual(self.notify(d, now, doc, send), ['DEMO.NS|t1'])
+            self.assertIn('hit T1 ₹101.00 · booked 5 · stop moved to entry ₹100.20', sent[1])
+            now, doc = self.settle_at(d, '10:41')
+            self.assertEqual(self.notify(d, now, doc, send), ['DEMO.NS|exit'])
+            self.assertIn('breakeven stop @ ₹100.20', sent[2])
+            self.assertIn('trade net', sent[2])
+            self.assertEqual(len(sent), 3)
+
+    def test_late_and_final_milestones_are_recorded_not_sent(self):
+        send = mock.Mock()
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / 'picks-2026-11-13.json').write_text(json.dumps({'trade_date': '2026-11-13', 'picks': [plan()]}))
+            now, doc = self.settle_at(d, '10:20')     # entry at 09:30 and T1 at 09:45: older than 30 minutes
+            self.assertEqual(self.notify(d, now, doc, send), [])
+            now, doc = self.settle_at(d, '16:00')     # final: the scorecard covers the exit
+            self.assertTrue(doc['final'])
+            self.assertEqual(self.notify(d, now, doc, send), [])
+            send.assert_not_called()
+            self.assertEqual(json.loads((Path(d) / 'updates-2026-11-13.json').read_text()),
+                             ['DEMO.NS|entry', 'DEMO.NS|exit', 'DEMO.NS|t1'])
+
+    def test_failed_send_is_retried_and_cancellations_reported(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / 'picks-2026-11-13.json').write_text(json.dumps({'trade_date': '2026-11-13', 'picks': [plan()]}))
+            gap = [('09:15', 101.0, 101.2, 100.8, 101.0)] + flat('09:20', '15:30', 101)
+            now, doc = self.settle_at(d, '09:21', gap)
+
+            def down(*a):
+                raise ValueError('Telegram HTTP 502')
+            self.assertEqual(self.notify(d, now, doc, down), [])
+            sent = []
+            self.assertEqual(self.notify(d, now, doc, lambda *a: sent.append(a[2])), ['DEMO.NS|skipped'])
+            self.assertIn('⏭ <b>DEMO BUY</b> · Gapped past the no-chase level', sent[0])
+
+    def test_settle_cli_sends_updates_and_dry_run_keeps_no_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg_path = Path(d) / 'picks.json'
+            cfg_path.write_text(json.dumps({'state_dir': d}))
+            (Path(d) / 'picks-2026-11-13.json').write_text(json.dumps({'trade_date': '2026-11-13', 'picks': [plan()]}))
+            now = dt.datetime(2026, 11, 13, 9, 41, tzinfo=IST)
+            base = ['--config', str(cfg_path), '--env-file', '/dev/null', '--settle', '--as-of', now.isoformat()]
+            env = {'TELEGRAM_BOT_TOKEN': 't', 'TELEGRAM_CHAT_ID': 'c'}
+            with mock.patch.dict('os.environ', env), mock.patch.object(P, 'fetch_yahoo_5m', return_value=upto(RUN_UP, now)), \
+                    mock.patch.object(P, 'send_telegram') as send, mock.patch('builtins.print'), mock.patch('sys.stderr'):
+                self.assertEqual(P.main(base + ['--dry-run']), 0)
+                self.assertFalse((Path(d) / 'updates-2026-11-13.json').exists())
+                self.assertEqual(P.main(base), 0)
+                self.assertEqual(send.call_count, 1)
+                cfg_path.write_text(json.dumps({'state_dir': d, 'live_updates': False}))
+                (Path(d) / 'updates-2026-11-13.json').unlink()
+                self.assertEqual(P.main(base), 0)
+                self.assertEqual(send.call_count, 1)
+
+
+class StricterLessons(unittest.TestCase):
+    def test_a_gap_inside_the_noise_is_not_a_lesson(self):
+        with tempfile.TemporaryDirectory() as d:
+            noisy = [-2.5, 2.0, -2.5, 1.5, -2.0, 1.0, -2.0, 2.0]          # mean -0.31R, sd ~2R
+            results(d, '2026-11-10', [closed(r, ['side:BUY', 'rsi_stretched']) for r in noisy] +
+                    [closed(r, ['side:BUY']) for r in (0.3, -0.5, 1.2, -0.4, 0.6, 0.1)])
+            row = next(r for r in R.lessons(d)['traits'] if r['trait'] == 'rsi_stretched')
+            self.assertEqual((row['status'], row['penalty']), ('unclear', 0))
+            self.assertGreater(row['gap_se'], 0.5)
+
+
+def wavy(n=320, start=dt.date(2025, 1, 1)):
+    closes = [500 * (1.003 ** i) + 25 * math.sin(i / 1.5) for i in range(n)]
+    vols = [7_500_000 if i % 6 == 0 else 3_000_000 for i in range(n)]
+    return daily(closes, vols, start=start)
+
+
+class Backtest(unittest.TestCase):
+    def path(self, o, h, l, c, side='BUY'):
+        p = plan(side)
+        return BT.simulate_daily(p, Bar(dt.datetime(2026, 11, 13, 9, 15, tzinfo=IST), o, h, l, c, 1), path='worse'), \
+            BT.simulate_daily(p, Bar(dt.datetime(2026, 11, 13, 9, 15, tzinfo=IST), o, h, l, c, 1), path='better')
+
+    def test_both_paths_bracket_the_day(self):
+        # Dipped below the stop before the trigger, then rallied: a stop only on the worse path.
+        worse, better = self.path(99.5, 100.4, 98.5, 100.3)
+        self.assertEqual((worse['reason'], better['reason']), ('stop', 'close'))
+        self.assertLess(worse['r'], 0)
+        self.assertGreater(better['net'], worse['net'])
+        # Opened inside the entry band, then reached T2 and the stop: the order decides.
+        worse, better = self.path(100.3, 102.5, 98.5, 100)
+        self.assertEqual(better['fill'], 100.3)
+        self.assertEqual((worse['reason'], better['reason']), ('stop', 'T1+T2'))
+        # T1 then back below entry: breakeven on both paths.
+        self.assertEqual(self.path(99.8, 101.2, 99.6, 99.7)[0]['reason'], 'T1+breakeven')
+        self.assertEqual(self.path(100.8, 101, 100, 100)[0]['status'], 'SKIPPED')
+        self.assertEqual(self.path(99.0, 100.0, 98, 99.5)[0]['status'], 'NOT_TRIGGERED')
+        worse, better = self.path(100.2, 100.3, 97.5, 97.9, side='SELL')
+        self.assertEqual((worse['reason'], better['reason']), ('T1+T2', 'T1+T2'))
+
+    def test_stats_drawdown_and_noise(self):
+        trades = [dict(status='CLOSED', r=r, net=r * 1000, date='2026-01-%02d' % i, traits=[])
+                  for i, r in enumerate((1.0, -1.0, -1.0, 2.0), 1)] + [dict(status='NOT_TRIGGERED', r=None, net=None, date='x')]
+        s = BT.stats(trades)
+        self.assertEqual((s['triggered'], s['win_rate'], s['avg_r'], s['max_drawdown']), (4, 50.0, 0.25, 2000.0))
+        self.assertEqual(s['trigger_rate'], 80.0)
+        self.assertGreater(BT.noise(trades)['trades_to_detect'], 8)
+
+    def test_trait_table_verdicts(self):
+        trades = [dict(status='CLOSED', r=-1.0 + 0.01 * i, traits=['rsi_stretched']) for i in range(20)] + \
+                 [dict(status='CLOSED', r=0.5 + 0.01 * i, traits=[]) for i in range(20)]
+        row = BT.trait_table(trades)[0]
+        self.assertEqual((row['trait'], row['verdict'], row['live_rule_lesson']), ('rsi_stretched', 'worse', True))
+
+    def test_run_offline_report(self):
+        bars = wavy()
+        with tempfile.TemporaryDirectory() as d:
+            cfg = dict(CFG, symbols=['AAA.NS', 'BBB.NS'], state_dir=d, workers=1, min_score=0)
+            now = dt.datetime.combine(bars[-1].time.date() + dt.timedelta(days=1), dt.time(18), IST)
+            fetch = lambda s: bars if s != 'BBB.NS' else bars[:50]
+            rep = BT.run(cfg, now, fetch=fetch, intraday=False)
+            self.assertGreater(rep['alert']['signals'], 0)
+            self.assertEqual((rep['loaded'], rep['execution_enabled']), (2, False))
+            self.assertTrue(all(t['trade_date'] > t['date'] for t in rep['trades']))
+            self.assertTrue(list(Path(d, 'backtest-cache').glob('AAA.NS@*.json')))
+            text = BT.format_report(rep)
+            for part in ('ALERT', 'SCORE vs OUTCOME', 'TRAITS', 'CAVEATS', 'survivorship'):
+                self.assertIn(part, text)
+            # The cache serves a second run without fetching.
+            again = BT.run(cfg, now, fetch=mock.Mock(side_effect=AssertionError('fetched')), intraday=False)
+            self.assertEqual(again['alert'], rep['alert'])
+
+    def test_intraday_check_uses_the_paper_trade_rules(self):
+        day = dt.date(2026, 11, 13)
+        p = plan()
+        alerts = [dict(trade_date=day.isoformat(), symbol='DEMO.NS', status='CLOSED', r=-1.0, r_hi=0.5, net=-100.0,
+                       net_hi=50.0, date='2026-11-12')]
+        rows = TRIGGER + [('09:30', 100.2, 101.1, 100.1, 101.0), ('09:35', 101, 102.1, 100.9, 102.0)] + flat('09:40', '15:30', 102)
+        out = BT.intraday_check([(day, p)], alerts, AFTER + dt.timedelta(days=1),
+                                fetch=lambda s, days, now: {day: session(rows)})
+        self.assertEqual(out['exact']['triggered'], 1)
+        self.assertGreater(out['exact']['avg_r'], 0)
+        self.assertEqual(out['agreement_pct'], 0.0)
+
 
 if __name__ == '__main__':
     unittest.main()

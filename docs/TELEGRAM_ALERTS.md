@@ -77,6 +77,27 @@ Plans are intraday.
 Short-sale setups are intraday-only (MIS). The cash segment cannot carry a
 short overnight. Set `"allow_short": false` for buy-only alerts.
 
+## Results, board meetings and ex-dates
+
+A setup built on yesterday's candle is meaningless if the company announces
+results before today's open: the stock can gap far past a 0.5×ATR stop. Before
+choosing picks, the alert reads two public NSE lists for the window from the
+signal session through the trade day, weekends included
+(`india/events.py`):
+
+| Event | Effect with `"events": "skip"` (default) |
+| --- | --- |
+| Board meeting for results, fund raising, buyback, split, bonus, merger, scheme, rights, delisting and similar | Stock dropped. The alert lists it: `📅 Skipped for results/events: ABB (Board meeting 13 Nov: Financial Results)` |
+| Split, bonus, rights, demerger or consolidation ex-date on the trade day | Stock dropped (the price scale changes overnight) |
+| Other board meeting (e.g. "Other business matters"), dividend or other ex-date on the trade day | Kept, with a `📅` line on the pick |
+
+`"events": "flag"` keeps every stock and marks blocked ones with a `📅` warning
+and a High risk level; `"off"` skips the check. When the check ran, the alert
+header says `📅 Results, board meetings and ex-dates checked`. If NSE is
+unreachable, the last fetched calendar is used when it covers the window;
+otherwise the alert says the calendar was unavailable and you should check
+results yourself. It never guesses an event.
+
 ## Setup
 
 1. **Create the bot.** In Telegram, message **@BotFather**, send `/newbot` and
@@ -111,7 +132,7 @@ short overnight. Set `"allow_short": false` for buy-only alerts.
 | Service | What it does |
 | --- | --- |
 | `dashboard` | The dashboard at http://127.0.0.1:8765, published on host loopback only |
-| `alerts` | `india.picks --serve`: sends the morning alert at `alert_time` (08:45 IST) on NSE trading days, retried up to 3 times; settles paper trades every 10 minutes; sends the 15:40 scorecard |
+| `alerts` | `india.picks --serve`: sends the morning alert at `alert_time` (08:45 IST) on NSE trading days, retried up to 3 times; settles paper trades every `settle_minutes` (10), sending in-session updates; sends the 15:40 scorecard |
 
 ```sh
 docker compose up -d --build     # start, or rebuild after code changes
@@ -176,7 +197,7 @@ python3 -m india.picks --config config/picks.json --settle                  # to
 python3 -m india.picks --config config/picks.json --settle --date 2026-11-13 # a past session (within ~60 days)
 ```
 
-A second LaunchAgent runs `--settle` every 10 minutes. It does nothing
+A second LaunchAgent runs `--settle` every `settle_minutes` (10). It does nothing
 outside NSE sessions or before 09:20. During the session it saves
 provisional results, with open trades marked to the latest candle. After
 15:40 IST the session is final, and the bot sends one scorecard with each
@@ -190,6 +211,30 @@ python3 -m india.picks --config config/picks.json --print-launchd-settle \
   > ~/Library/LaunchAgents/com.daytrader.picks.settle.plist
 launchctl load ~/Library/LaunchAgents/com.daytrader.picks.settle.plist
 ```
+
+### In-session updates
+
+With `"live_updates": true` (default), each settle also sends a short
+Telegram message when a paper trade reaches a milestone:
+
+```
+⏱ Paper trade update · 09:41 IST
+🟢 RADICO BUY triggered · paper fill 12 @ ₹4,643.10 (5-min close 09:35)
+    Stop ₹4,569.70 · T1 ₹4,716.10 · T2 ₹4,789.30
+```
+
+Milestones are the trigger, T1 (half booked, stop to entry), the final exit
+(stop, breakeven, T2 or square-off, with net P&L and R), a gap or chase skip,
+and "not triggered by 11:30". Each is sent once per trade
+(`var/state/picks/updates-<date>.json`). A trigger, T1 or exit found more
+than 30 minutes after its candle (for example after the Mac woke from sleep),
+or any milestone on the final settle, is recorded but not sent, because the
+scorecard covers it. A gap skip or "not triggered" notice has no candle time,
+so it is sent by the first in-session settle that sees it, however late. A
+failed send is retried on the next settle. Updates follow delayed candles and
+the settle cadence, so they arrive up to `settle_minutes` plus the feed delay
+after the event. Set `"settle_minutes": 5` for faster updates. They report the
+paper trade, not your broker's fills.
 
 Results are saved as `var/state/picks/results-<date>.json`. Open the
 dashboard's **Alert trades** page (`python3 -m dashboard`, then
@@ -229,6 +274,8 @@ becomes an **active lesson** when all of these hold:
 - At least `learn_min_trades` (8) closed trades have it.
 - They average −0.25R or worse.
 - They are at least 0.25R worse than enough trades without it.
+- That gap is more than twice its standard error. A worse-looking trait
+  inside the noise shows as *Within noise* on the dashboard, not as a lesson.
 
 Each active lesson takes `learn_penalty` (10) points off new setups with
 that trait. The total is capped at `learn_max_penalty` (20). The alert shows
@@ -241,21 +288,58 @@ appear as suggestions. They are not applied automatically, because they
 change the trade rules and need a backtest first. Set `"learning": false` to
 record without adjusting scores.
 
-Small samples mislead. A few trades a day means weeks before any trait
-reaches 8 trades, and a lesson is a ranking adjustment, not proof.
+Small samples mislead. One paper trade's R typically varies by about 0.8R,
+so the average of 8 trades is uncertain by about ±0.28R: the standard-error
+condition usually needs dozens of trades before a 0.25R gap counts. A lesson
+is a ranking adjustment, not proof.
 
 Simulated fills are optimistic in one way and pessimistic in another. Real
 fills can be worse than a candle's close. The stop-first rule, however,
 under-counts some winners.
 
+## Backtest the scoring
+
+```sh
+python3 -m india.picks_backtest --config config/picks.json            # ~30 s first run, cached per day
+python3 -m india.picks_backtest --config config/picks.json --since 2025-01-01
+```
+
+For every past session (about four years of Yahoo daily candles), the
+backtest scores the universe exactly as the alert does, with the same
+features, filters, plan and top-N selection and learning off, using only
+candles up to that session. It then trades each candidate on the next
+session:
+
+- **Daily approximation**, every session. Only the next day's open, high, low
+  and close are known, so each trade is walked along open→high→low→close and
+  open→low→high→close with the plan's gap skip, trigger, stop, T1/breakeven
+  and T2, exiting at the close. The worse and better paths bracket the result.
+  The 5-minute trigger close, the 11:30 deadline and the 15:10 square-off
+  cannot be checked, so it counts more triggers than the live rules do.
+- **Intraday check**, about the last 60 days. Yahoo still has 5-minute
+  candles for these, so the recent alert picks are replayed with the exact
+  paper-trade rules (`india.picks.simulate`) and compared with the daily
+  bracket.
+
+The report shows the alert's result (both paths, by side and by year),
+average R by score bucket for every candidate, each trait's gap with its
+standard error, and how many trades a lesson needs to clear the noise. The
+full report goes to `var/state/picks/backtest-latest.json`. Caveats are
+printed with it: today's index list (survivorship bias), prices not adjusted
+for dividends, estimated costs, and no events filter in history.
+
 ## Limits
 
-- Signals come from delayed end-of-day data. Opening gaps, news and results
-  can invalidate a setup before 09:15. The alert flags unusual volume and
-  large moves, but it does not read news or the results calendar.
+- Signals come from delayed end-of-day data. Opening gaps and news can
+  invalidate a setup before 09:15. The results/events check covers scheduled
+  board meetings and ex-dates, not unscheduled news.
 - The built-in NSE holiday calendar covers 2026. Before January 2027, add the
   2027 holidays to a calendar file and set `"calendar"` in the config.
   Otherwise the job reports that the calendar does not cover the date.
-- Scores are a rule-based ranking, not a probability of profit. Nothing has
-  been backtested as a portfolio strategy. Paper-trade the alerts before
-  risking money.
+- Scores are a rule-based ranking, not a probability of profit. The first
+  backtest (13 Nov 2026, NIFTY 200, Sep 2022–Nov 2026, default settings)
+  found **no edge after costs**. The alert averaged −0.30R per trade on the
+  worse daily path and −0.04R on the better one, and −0.17R over 26
+  recent trades replayed on 5-minute candles. Score barely predicted outcome
+  (correlation +0.04). Costs alone take about 0.13R per trade. Rerun the
+  backtest after changing any rule, and paper-trade before risking money.
