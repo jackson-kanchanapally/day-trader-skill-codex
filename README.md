@@ -31,6 +31,8 @@ A numerical setup is separate from independent-team clearance.
 - Check completed-bar entries, choose tick-rounded stops and targets, and size whole-share positions with estimated Indian charges and slippage.
 - Replay historical rules, run holdout research and inspect seeded paper scenarios when sufficient history is available.
 - Get the day's top three NSE setups with entry, exit and risk plans as a [Telegram bot alert](docs/TELEGRAM_ALERTS.md) before the open. Stocks with results that day are skipped, and each alert is paper-traded with in-session updates. `python3 -m india.picks_backtest` replays the scoring over years of history. `docker compose up -d` keeps the alerts and the dashboard running.
+- Get a morning [MCX GOLD PETAL swing alert](docs/GOLD_ALERTS.md) on the same Telegram bot from free data (COMEX gold × USD/INR, calibrated to your broker's price). Each setup has an SL-order entry, stop, T1, trailing exit and lot size, and is paper-traded. `python3 -m india.gold --backtest` measures the rules over 20 years.
+- Run the [gold strategy lab](docs/GOLD_LAB.md): 21 gold strategies tested over 20 years with walk-forward checks, paper-traded forward in a tamper-evident ledger, with a champion replaced only by pre-registered rules and a monthly self-improvement pass.
 - Maintain a local SQLite paper ledger and persistent price/time alert definitions.
 - Review supplied issuer financials, dated headlines and public disclosure exports.
 - Coordinate ten independent specialists over frozen evidence and inspect their saved reviews in a local dashboard.

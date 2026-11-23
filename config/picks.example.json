@@ -39,5 +39,32 @@
     "max_backoff_seconds": 900,
     "snapshot_limit": 500,
     "symbol_filter": ""
+  },
+  "gold": {
+    "enabled": false,
+    "state_dir": "var/state/gold",
+    "alert_time": "08:30",
+    "capital": 100000,
+    "risk_per_trade": 1000,
+    "max_leverage": 1.0,
+    "min_score": 60,
+    "allow_short": false,
+    "contract": "GOLDPETAL",
+    "lot_grams": 1,
+    "tick": 1.0,
+    "margin_pct": 10.0,
+    "basis": 1.15,
+    "calibration_max_days": 7,
+    "entry_valid_sessions": 3,
+    "max_hold_sessions": 40,
+    "target1_r": 1.0,
+    "target2_r": 3.0,
+    "trail_atr": 2.0,
+    "event_dates": [],
+    "live_watch": true,
+    "watch_minutes": 15,
+    "mcx_hours": ["09:00", "23:30"],
+    "commands": true,
+    "news": "flag"
   }
 }

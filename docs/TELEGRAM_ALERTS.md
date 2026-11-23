@@ -132,7 +132,7 @@ results yourself. It never guesses an event.
 | Service | What it does |
 | --- | --- |
 | `dashboard` | The dashboard at http://127.0.0.1:8765, published on host loopback only |
-| `alerts` | `india.picks --serve`: sends the morning alert at `alert_time` (08:45 IST) on NSE trading days, retried up to 3 times; settles paper trades every `settle_minutes` (10), sending in-session updates; sends the 15:40 scorecard; optionally records delayed stock/index snapshots in the same loop |
+| `alerts` | `india.picks --serve`: sends the morning alert at `alert_time` (08:45 IST) on NSE trading days, retried up to 3 times; settles paper trades every `settle_minutes` (10), sending in-session updates; sends the 15:40 scorecard; optionally records delayed stock/index snapshots in the same loop; with `gold.enabled`, sends the [MCX GOLD PETAL swing alert](GOLD_ALERTS.md) at 08:30 IST Mon–Fri |
 
 ```sh
 docker compose up -d --build     # start, or rebuild after code changes

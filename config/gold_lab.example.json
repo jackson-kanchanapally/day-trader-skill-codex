@@ -1,0 +1,17 @@
+{
+  "_comment": "Optional. Copy to config/gold_lab.json to change the gold strategy lab (docs/GOLD_LAB.md). Without the file the defaults below apply. PROMOTION rules are fixed in india/gold_lab.py on purpose.",
+  "capital": 100000,
+  "vol_target_pct": 15.0,
+  "vol_lookback": 40,
+  "max_leverage": 1.0,
+  "rebalance_band": 0.25,
+  "carry_pct": 6.5,
+  "cash_rate_pct": 0.0,
+  "roll_monthly": true,
+  "train_years": 5,
+  "first_test_year": 2011,
+  "bootstrap_samples": 400,
+  "telegram": true,
+  "review_weekday": 0,
+  "initial_champion": "swing_v1"
+}

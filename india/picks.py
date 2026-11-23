@@ -79,6 +79,7 @@ DEFAULTS = {
     'live_updates': True,            # Telegram message when a paper trade triggers, hits T1, exits or is cancelled
     'settle_minutes': 10,            # --serve paper-trade cadence (5-30); live updates arrive this often
     'recorder': None,                # opt-in delayed snapshot recording; see config/picks.example.json
+    'gold': None,                    # opt-in MCX GOLD PETAL swing alerts; see india/gold.py
 }
 INDEX_FILES = {
     'nifty50': 'ind_nifty50list.csv', 'nifty100': 'ind_nifty100list.csv',
@@ -670,6 +671,8 @@ def load_config(path):
         raise ValueError('settle_minutes must be a whole number from 5 to 30')
     from .recorder import settings as recorder_settings
     cfg['recorder'] = recorder_settings(cfg['recorder'])
+    from .gold import settings as gold_settings
+    cfg['gold'] = gold_settings(cfg['gold'])
     return cfg
 
 
@@ -1273,7 +1276,8 @@ def make_recorder(cfg, calendar, now_fn=None, dry_run=False):
 
 
 def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=time.sleep,
-          main_fn=None, iterations=None, log=lambda msg: print(msg, flush=True), recorder=None):
+          main_fn=None, iterations=None, log=lambda msg: print(msg, flush=True), recorder=None, gold_fn=None,
+          lab_fn=None):
     """Long-running scheduler for a container: morning alert + settles every settle_minutes.
 
     The alert runs once per session between alert_time and entry_deadline on NSE
@@ -1282,8 +1286,28 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
     The optional recorder shares this loop: one NSE index request per tick and
     a Yahoo stock-close refresh once per completed five-minute window. A
     heartbeat file lets the container check the loop.
+
+    With gold.enabled, the MCX GOLD PETAL swing alert runs Monday-Friday from
+    gold.alert_time until 23:00 IST, once per day, retried at most 3 times.
+    gold.commands answers Telegram commands on every tick, and gold.live_watch
+    checks open gold paper trades every watch_minutes inside gold.mcx_hours.
+    After the gold alert has run for the day, the gold strategy lab
+    (india.gold_lab) logs its forward paper decisions, also at most 3 attempts.
     """
     main_fn = main_fn or main
+    gold = cfg.get('gold') or {}
+    if gold_fn is None:
+        from . import gold as gold_module
+        gold_fn = gold_module.main
+    lab_dir = None
+    if gold.get('enabled'):
+        from . import gold_lab
+        lab_fn = lab_fn or gold_lab.main
+        try:
+            lab_dir = Path(gold_lab.load_settings(gold_lab.DEFAULT_LAB_CONFIG, gold)['state_dir'])
+        except (ValueError, OSError) as exc:
+            log('gold lab disabled: %s' % exc)
+    gold_attempts, lab_attempts, last_watch = {}, {}, None
     state = Path(cfg['state_dir'])
     state.mkdir(parents=True, exist_ok=True)
     attempts, last_settle, n, recorder_status = {}, None, 0, {}
@@ -1291,8 +1315,9 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
     own_recorder = recorder is None and (cfg.get('recorder') or {}).get('enabled', False)
     if own_recorder:
         recorder = make_recorder(cfg, calendar, now_fn, dry_run='--dry-run' in base_args)
-    log('scheduler started: alert %s IST on NSE trading days, settle every %d minutes' % (
-        cfg['alert_time'], cfg['settle_minutes']))
+    log('scheduler started: alert %s IST on NSE trading days, settle every %d minutes%s' % (
+        cfg['alert_time'], cfg['settle_minutes'],
+        '; gold alert %s IST Mon-Fri' % gold['alert_time'] if gold.get('enabled') else ''))
     while iterations is None or n < iterations:
         n += 1
         now = now_fn()
@@ -1327,6 +1352,41 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
                     main_fn(base_args)
                 except Exception as exc:          # never let one run kill the service
                     log('alert run crashed: %r' % exc)
+        if gold.get('enabled') and today.weekday() < 5 \
+                and hhmm(gold['alert_time']) <= now.time() < dt.time(23, 0) \
+                and not (Path(gold['state_dir']) / ('ran-%s' % today.isoformat())).exists():
+            count, last = gold_attempts.get(today, (0, None))
+            if count < 3 and (last is None or now - last >= dt.timedelta(minutes=20)):
+                gold_attempts[today] = (count + 1, now)
+                log('%s running gold alert (attempt %d)' % (now.isoformat(timespec='seconds'), count + 1))
+                try:
+                    gold_fn(base_args)
+                except Exception as exc:
+                    log('gold run crashed: %r' % exc)
+        if lab_dir is not None and today.weekday() < 5 and now.time() < dt.time(23, 0) \
+                and (Path(gold['state_dir']) / ('ran-%s' % today.isoformat())).exists() \
+                and not (lab_dir / ('ran-%s' % today.isoformat())).exists():
+            count, last = lab_attempts.get(today, (0, None))
+            if count < 3 and (last is None or now - last >= dt.timedelta(minutes=20)):
+                lab_attempts[today] = (count + 1, now)
+                log('%s running gold lab (attempt %d)' % (now.isoformat(timespec='seconds'), count + 1))
+                try:
+                    lab_fn(base_args)
+                except Exception as exc:
+                    log('gold lab crashed: %r' % exc)
+        if gold.get('enabled') and gold['commands']:
+            try:
+                gold_fn(base_args + ['--commands'])
+            except Exception as exc:
+                log('gold commands crashed: %r' % exc)
+        if gold.get('enabled') and gold['live_watch'] and today.weekday() < 5 \
+                and hhmm(gold['mcx_hours'][0]) <= now.time() < hhmm(gold['mcx_hours'][1]) \
+                and (last_watch is None or now - last_watch >= dt.timedelta(minutes=gold['watch_minutes'])):
+            last_watch = now
+            try:
+                gold_fn(base_args + ['--watch'])
+            except Exception as exc:
+                log('gold watch crashed: %r' % exc)
         if last_settle is None or now - last_settle >= every:
             last_settle = now
             try:
