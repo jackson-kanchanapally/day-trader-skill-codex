@@ -17,8 +17,9 @@ import tempfile
 SWITCHES = {
     'gold': dict(default=True, label='Gold futures signals',
                  detail='MCX GOLD PETAL swing setups, live level updates and gold lab notices'),
-    'index_fno': dict(default=False, label='Index F&O signals',
-                      detail='NIFTY 50 and NIFTY BANK opening-range futures signals with stop/target updates'),
+    'index_fno': dict(default=False, label='Index options signals',
+                      detail='NIFTY and BANKNIFTY options desk: 09:05 brief, graded entries with strike, '
+                             'premium stop/targets, lot size and exit updates'),
 }
 FILENAME = 'alert-switches.json'
 

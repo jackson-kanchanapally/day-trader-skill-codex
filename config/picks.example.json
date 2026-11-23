@@ -71,14 +71,33 @@
     "state_dir": "var/state/index_fno",
     "indices": ["NIFTY 50", "NIFTY BANK"],
     "vix_index": "INDIA VIX",
+    "brief_time": "09:05",
     "range_minutes": 15,
     "entry_deadline": "13:30",
     "square_off": "15:15",
     "min_range_pct": 0.15,
     "max_range_pct": 1.2,
+    "breakout_buffer_pct": 0.05,
     "max_vix": 25.0,
+    "buy_iv_max": 16.0,
+    "min_score": 60,
     "target_r": [1.0, 2.0],
     "fresh_minutes": 10,
-    "lot_size": {}
+    "time_stop_minutes": 60,
+    "min_dte": 2,
+    "risk_per_trade": null,
+    "max_daily_loss": null,
+    "max_open_trades": 1,
+    "max_spread_pct": 5.0,
+    "max_premium_loss_pct": 45.0,
+    "min_option_rr": 1.5,
+    "rate": 0.065,
+    "chain_source": "model",
+    "send_skips": true,
+    "event_dates": [],
+    "contracts": {
+      "NIFTY 50": {"lot": 65, "step": 50, "expiry_weekday": 1, "monthly": false},
+      "NIFTY BANK": {"lot": 30, "step": 100, "expiry_weekday": 1, "monthly": true}
+    }
   }
 }

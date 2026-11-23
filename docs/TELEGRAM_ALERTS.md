@@ -502,7 +502,7 @@ such a minute. A full-session run has not been checked.
 - Intraday history starts when the recorder starts. Yahoo keeps about 60 days
   of five-minute candles; nothing here gives years of intraday data.
 - `india/index_fno.py` reads the index candles when the index F&O switch is
-  on (next section).
+  on (see [Index options signals](#index-options-signals)).
 
 ## Alert switches
 
@@ -515,54 +515,170 @@ so nothing needs a restart. Both Docker services mount `./var`.
 | Switch | Default | When off |
 | --- | --- | --- |
 | Gold futures signals | On | The gold morning alert, live level updates, failure notices and gold lab messages are not sent. No new gold paper trade is opened. The gold lab still logs its forward decisions, live watch still advances so old crossings are not replayed later, and `/gold`, `/price` and the other commands still answer. |
-| Index F&O signals | Off | `india.index_fno` does not run and its recorder is stopped. |
+| Index options signals | Off | `india.index_fno` does not run and its recorder is stopped. |
 
 The gold switch only works when `gold.enabled` is true in
 `config/picks.json`; the dashboard says so when it is not. The daily stock
 picks are not switched here.
 
-## Index F&O signals
+## Index options signals
 
-`india/index_fno.py` sends a paper-only NIFTY 50 / NIFTY BANK futures signal
-from the recorder's sampled five-minute NSE index candles. Per index, once per
-session:
+`india/index_fno.py` runs a paper-only options desk for NIFTY and BANKNIFTY
+while the **Index options signals** switch is on.
 
-1. **Opening range.** The high and low of 09:15–09:30 (`range_minutes`). All
-   three candles must be usable, else no signal that day.
-2. **Filters.** Skip the day when the range is under `min_range_pct` (0.15%)
-   or over `max_range_pct` (1.2%), or when India VIX is above `max_vix` (25)
-   at the breakout.
-3. **Signal.** The first five-minute close above the range is BUY, below it
-   SELL, before `entry_deadline` (13:30). A breakout seen more than
-   `fresh_minutes` (10) late, because the switch was off or data was late, is
-   recorded as missed and not sent.
-4. **Exits.** Entry is that close and the stop is the other side of the range.
-   Half is booked at T1 (1R) and its stop moves to the entry; the rest exits at
-   T2 (2R), the stop, or `square_off` (15:15). A stop and a target inside one
-   candle count as the stop.
+**09:05 desk brief.** For each index it lists yesterday's high, low and close,
+the central pivot range (CPR; narrow means a trend day is likely, wide means a
+range day), R1/S1, the daily trend (EMA20/EMA50) and ATR. It also gives the
+India VIX regime and the structure that regime calls for, and the expiry and
+lot in use. With a live chain it adds PCR, max pain and the call and put OI
+walls. Daily data comes from NSE's historical MCP.
 
-Telegram gets the signal and then one message per step (T1, T2, stop,
-breakeven, square-off) with the result in index points and R, before costs.
-Set `lot_size`, for example `{"NIFTY 50": 65}`, to add rupee risk per lot.
-Check the current lot size on NSE first, because NSE revises it. State is kept
-in `var/state/index_fno/signals-YYYY-MM-DD.json`.
+**Entries.** Per index, once per session:
+
+1. The 09:15–09:30 opening range from the recorder's five-minute index
+   candles (all three must be usable).
+2. A five-minute close beyond the range by a buffer (0.05% of price or 10% of
+   the range, whichever is more) before 13:30. No trade when the range is under
+   0.15% or over 1.2%, VIX is above 25, the day is listed in `event_dates`, or
+   the breakout is seen more than 10 minutes late.
+3. A grade from 0 to 100 that weighs:
+   - daily-trend alignment (±20)
+   - CPR width (±10)
+   - whether price is beyond the CPR (±5)
+   - room to the next level (PDH/PDL, R1/S1, R2/S2, CPR, OI wall); a level
+     closer than 1R **blocks** the trade
+   - breakout candle strength (+10)
+   - opening-range quality (+5)
+   - cheap VIX (+5)
+   - PCR agreement (±10)
+
+   Grades below `min_score` (60) are not traded. With `send_skips`, one line
+   says why.
+4. The option structure. The expiry is the first one at least `min_dte` (2)
+   sessions away, which avoids expiry-day theta and gamma. Candidates are
+   priced, sized and checked for reward to T2 per rupee risked, after charges
+   (`min_option_rr`, 1.5):
+   - VIX at or below `buy_iv_max` (16): buy outright, ATM, or one strike in
+     the money when expiry is three sessions or less away. A debit spread is
+     the fallback when an outright lot does not fit the budget.
+   - VIX above 16: compare a one-strike-ITM buy (less extrinsic value to
+     bleed) with a debit spread at least four strikes wide (the sold leg
+     offsets IV), and pick the better reward/risk.
+
+   Naked option selling is never suggested. Lots are sized so the stop costs
+   at most `risk_per_trade` including charges; when this is null the picks
+   `risk_per_trade` is used. A structure that does not fit is skipped with the
+   rupee figure.
+
+**Alert.** Each alert gives:
+
+- the contract (for example `NIFTY 01 DEC 24100 CE`), grade and expiry
+- an entry premium with a do-not-chase price
+- a stop as both a premium and a spot level
+- T1 (1R: book half, stop to cost) and T2 (2R, pulled in to a level between
+  1.2R and 2R)
+- a theta time stop (60 minutes without T1) and the square-off at 15:15
+- rupee risk, reward/risk, and the reasons for the grade
+
+Updates follow for T1, T2, stop, breakeven, time stop and square-off, with the
+exit premium and the P&L in rupees after estimated charges.
+
+**Premiums: free, no broker account.** NSE publishes no free official
+option-chain service, and its Terms of Use restrict automated collection from
+the website, so nothing here scrapes it. Premiums are Black-Scholes estimates
+from NSE's official India VIX. NIFTY uses VIX as it is; BANKNIFTY uses VIX ×
+its 20-day realised volatility ÷ NIFTY's, held to 0.8–2.0, from the same free
+daily history. The brief shows the IV used. Alerts lead with the index level
+for every stop and target and show premiums as "≈". Each alert also gives the
+option's delta (for example "≈₹0.54 per NIFTY point"): if your broker shows a
+different premium, keep trading the index levels, and skip if the premium is
+above the stated cap. Exits are judged on the index; their premiums are
+estimates. PCR, max pain and OI walls need a live chain, so they are left out
+on the free source.
+
+Expiries follow `contracts.<index>.expiry_weekday` and `monthly`: NIFTY weekly
+on Tuesday and BANKNIFTY on the last Tuesday of the month, each moved to the
+previous session when that day is a holiday. Lot sizes default to 65 (NIFTY)
+and 30 (BANKNIFTY). **Check these against NSE's current circulars**, because
+NSE revises them.
+
+Optional: if you already have an Upstox account, `"chain_source": "upstox"`
+with `UPSTOX_ANALYTICS_TOKEN=...` in `var/telegram.env` uses its live chain
+(bid/ask, IV, delta, OI, PCR, max pain) and its real expiries and lot sizes.
+It is never used unless you choose it.
 
 When the switch is on and `recorder.enabled` is false, the scheduler starts an
-indices-only recorder (no Yahoo stock closes) and stops it when the switch goes
-off. Turn the switch on before 09:15, because a recorder started later misses
-the opening range and gives no signal that day. Try it without Telegram:
+indices-only recorder and stops it when the switch goes off. Turn the switch on
+before 09:05: a recorder started after 09:15 misses the opening range. To try
+it without Telegram:
 
 ```sh
 python3 -m india.index_fno --config config/picks.json --dry-run
+python3 -m india.index_fno --config config/picks.json --dry-run --as-of 2026-11-23T09:06:00+05:30
 ```
+
+**Daily risk.** At most `max_open_trades` (1) options trade is open at a time
+across NIFTY and BANKNIFTY. Realised losses plus the risk of open trades stay
+within `max_daily_loss`; when that is null, the cap is 2 × the options
+`risk_per_trade`. A new trade is sized to the room left under the cap, and when
+there is none it is skipped with one line giving the reason.
+
+**Offline mornings.** For example, the laptop has no internet, or is asleep,
+until 10:15:
+
+- **Brief:** it waits for the daily data and goes out late (marked
+  `LATE 10:16`, with the opening ranges) at any time before the entry
+  deadline. After 13:30 it is skipped.
+- **Missing candles:** the scheduler fills the recorder's missing candles from
+  Yahoo's free five-minute chart, the whole gap and not just the opening range.
+  A breakout that happened while offline is then recognised as stale and is not
+  chased; a breakout after the reconnect is traded as usual. The recorder's own
+  candles are always preferred, Yahoo is asked at most every five minutes per
+  index, and only for windows that closed more than three minutes earlier.
+- **Messages:** they go into an outbox in the day's state file and are sent in
+  order. A failed send stays queued for the next tick instead of being lost,
+  and a message delivered two or more minutes late starts with "⌛ Delayed N
+  min". Undelivered messages expire:
+  - a new entry after `fresh_minutes` (10), because acting late is worse than
+    missing it; its follow-ups are dropped too, and one note lists the entries
+    that expired
+  - a skip note after 30 minutes
+  - the brief at the entry deadline
+  - trade updates at 16:00
+- **Daily jobs:** the morning stock picks, the gold alert and the gold lab only
+  use one of their three daily attempts when Telegram is reachable. A late
+  connection still gets them, within their usual windows (picks until 11:30,
+  gold until 23:00).
+
+**Replay backtest.** `python3 -m india.index_fno_backtest --config
+config/picks.json` drives the live engine through the last ~60 sessions, five
+minutes at a time. It uses Yahoo's free five-minute NIFTY, BANKNIFTY and India
+VIX candles and NSE daily levels from before each session, and writes
+`var/state/index_fno/backtest-latest.json`. It runs two passes: the live rules,
+and every breakout with the grade threshold, blockers and risk guard off,
+broken down by grade, blocker, index, side and structure.
+
+The first run (26 Aug–20 Nov 2026, 59 sessions) found **no edge**:
+
+- Every breakout taken: 106 trades, +0.02R per trade (±0.05 standard error)
+  on spot and +0.04R on modelled option P&L.
+- The 60-minute time stop closed 92 of the 106. Price reached 1R within an
+  hour of only 6% of breakouts, and within the day of 31%.
+- Grade A did +0.08R (±0.10) against −0.01R for grade C, which is within the
+  noise.
+- The "level within 1R" blocker stopped 86 of the 106 without improving
+  results.
+- The live rules sent one trade, because the blocker and the ₹1,000 budget
+  stopped the rest.
 
 Limits:
 
-- The levels are on the **spot index**, sampled from NSE's snapshot one to
-  three minutes behind. Futures trade at a premium to spot, so shift each level
-  by the current basis. Sampled candles are not exchange candles.
-- These rules have **no backtest yet**. Treat them as a paper experiment until
-  the recorded results show an edge after costs.
+- Spot levels come from NSE's delayed snapshot (one to three minutes behind),
+  sampled into candles that are not exchange candles. Exits are judged on spot,
+  and their premiums are live chain quotes or model estimates.
+- These rules have **no backtest**: there is no history of option prices here.
+  Treat the alerts as a paper experiment until the recorded results show an
+  edge after costs.
 - NSE describes its MCP data as informational, not for real-time trading
   ([NOTICE.md](../NOTICE.md)).
 

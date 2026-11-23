@@ -34,6 +34,7 @@ import html
 import json
 import math
 import os
+import socket
 import sys
 import time
 import urllib.error
@@ -1278,9 +1279,18 @@ def make_recorder(cfg, calendar, now_fn=None, dry_run=False):
                             now_fn=now_fn, dry_run=dry_run)
 
 
+def internet_ok(host='api.telegram.org', timeout=5):
+    """Can we open a TCP connection to Telegram? (DNS failure or no route means offline.)"""
+    try:
+        socket.create_connection((host, 443), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
+
+
 def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=time.sleep,
           main_fn=None, iterations=None, log=lambda msg: print(msg, flush=True), recorder=None, gold_fn=None,
-          lab_fn=None, fno_fn=None):
+          lab_fn=None, fno_fn=None, online_fn=None):
     """Long-running scheduler for a container: morning alert + settles every settle_minutes.
 
     The alert runs once per session between alert_time and entry_deadline on NSE
@@ -1296,6 +1306,10 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
     checks open gold paper trades every watch_minutes inside gold.mcx_hours.
     After the gold alert has run for the day, the gold strategy lab
     (india.gold_lab) logs its forward paper decisions, also at most 3 attempts.
+
+    With `online_fn`, a once-a-day job (morning alert, gold alert, gold lab)
+    only spends one of its 3 attempts when the internet is reachable, so a
+    laptop that comes online late still gets that day's alerts.
 
     While the dashboard's index_fno switch is on, india.index_fno runs on every
     tick of an NSE session. It reads the recorder's index candles, so an
@@ -1336,6 +1350,17 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
     log('scheduler started: alert %s IST on NSE trading days, settle every %d minutes%s' % (
         cfg['alert_time'], cfg['settle_minutes'],
         '; gold alert %s IST Mon-Fri' % gold['alert_time'] if gold.get('enabled') else ''))
+    offline_logged = set()
+
+    def reachable(job):
+        """True when no check is configured or the internet answers; logs one line per job and day when not."""
+        if online_fn is None or online_fn():
+            return True
+        if (job, today) not in offline_logged:
+            offline_logged.add((job, today))
+            log('%s offline: %s waits for the connection (no attempt used)' % (now.isoformat(timespec='seconds'), job))
+        return False
+
     while iterations is None or n < iterations:
         n += 1
         now = now_fn()
@@ -1383,7 +1408,7 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
         in_window = hhmm(cfg['alert_time']) <= now.time() < hhmm(cfg['entry_deadline'])
         if trading and in_window and not (state / ('sent-%s' % today.isoformat())).exists():
             count, last = attempts.get(today, (0, None))
-            if count < 3 and (last is None or now - last >= dt.timedelta(minutes=20)):
+            if count < 3 and (last is None or now - last >= dt.timedelta(minutes=20)) and reachable('morning alert'):
                 attempts[today] = (count + 1, now)
                 log('%s running morning alert (attempt %d)' % (now.isoformat(timespec='seconds'), count + 1))
                 try:
@@ -1394,7 +1419,7 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
                 and hhmm(gold['alert_time']) <= now.time() < dt.time(23, 0) \
                 and not (Path(gold['state_dir']) / ('ran-%s' % today.isoformat())).exists():
             count, last = gold_attempts.get(today, (0, None))
-            if count < 3 and (last is None or now - last >= dt.timedelta(minutes=20)):
+            if count < 3 and (last is None or now - last >= dt.timedelta(minutes=20)) and reachable('gold alert'):
                 gold_attempts[today] = (count + 1, now)
                 log('%s running gold alert (attempt %d)' % (now.isoformat(timespec='seconds'), count + 1))
                 try:
@@ -1405,7 +1430,7 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
                 and (Path(gold['state_dir']) / ('ran-%s' % today.isoformat())).exists() \
                 and not (lab_dir / ('ran-%s' % today.isoformat())).exists():
             count, last = lab_attempts.get(today, (0, None))
-            if count < 3 and (last is None or now - last >= dt.timedelta(minutes=20)):
+            if count < 3 and (last is None or now - last >= dt.timedelta(minutes=20)) and reachable('gold lab'):
                 lab_attempts[today] = (count + 1, now)
                 log('%s running gold lab (attempt %d)' % (now.isoformat(timespec='seconds'), count + 1))
                 try:
@@ -1429,7 +1454,8 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
             hours = calendar.hours(today, 'NSE') if fno_on else None
         except ValueError:
             hours = None
-        if hours and hours[0] <= now.time() < (dt.datetime.combine(
+        # From the pre-open desk brief until after the square-off.
+        if hours and hhmm(cfg['index_fno']['brief_time']) <= now.time() < (dt.datetime.combine(
                 today, hhmm(cfg['index_fno']['square_off'])) + dt.timedelta(minutes=20)).time():
             try:
                 fno_fn(base_args)
@@ -1510,7 +1536,7 @@ def main(argv=None):
             base = (['--config', a.config] if a.config else []) + ['--env-file', a.env_file]
             if a.dry_run:
                 base.append('--dry-run')
-            serve(base, cfg, calendar)
+            serve(base, cfg, calendar, online_fn=internet_ok)
             return 0
         if a.settle:
             day = dt.date.fromisoformat(a.date) if a.date else now.date()
