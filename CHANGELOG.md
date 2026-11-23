@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Index options use the Greeks. `options.bs_greeks` gives delta, gamma, theta (per day) and vega (per IV point); the free model returns all four and the Upstox chain keeps its gamma, theta and vega. Each candidate structure must have net delta of at least `min_delta` (0.10) and pay at most `max_theta_share` (25%) of its T1 premium gain in theta by the time stop. IV is cut by `iv_shock_pct` (5%) where the index rallies (a call's targets, a put's stop), so vega lowers reward/risk and lot size. Alerts add the position's Greeks in rupees (delta → delta at T1, ₹ per point, theta per day and to the time stop, vega and the IV-drop cost, points per hour to cover theta); the time stop reports theta paid; the brief adds ATM call/put Greeks per index, compared with the ATR pace. Replay over 59 sessions: the edge is unchanged (+0.02R ± 0.05 over 106 breakouts); in live rules the one trade the old rules took (a Δ≈0.09 debit spread that lost 0.58R) is now refused.
 - Offline mornings no longer lose the day.
   - **Brief:** the index options brief waits for the daily data and is sent late (marked `LATE`, with the opening ranges) until the entry deadline.
   - **Missing candles:** recorder gaps are filled from Yahoo's free five-minute candles across the whole gap, so a breakout that happened while offline is seen as stale and not chased, while later breakouts are traded.

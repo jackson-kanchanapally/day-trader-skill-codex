@@ -24,6 +24,14 @@ Signals, per index, once per session:
      and theta paid. Never a naked short. The expiry is the first one at
      least `min_dte` sessions away. Lots are sized so the stop costs at most
      `risk_per_trade` including charges.
+     Greeks: each structure's net delta, gamma, theta and vega (from the
+     chain, else Black-Scholes) decide too. Net delta under `min_delta` is
+     refused (the premium barely follows the index); theta paid by the time
+     stop above `max_theta_share` of the premium gain at T1 is refused. Vega:
+     India VIX tends to fall as the index rises, so IV is cut by
+     `iv_shock_pct` wherever the index rallies (a call's T1/T2, a put's
+     stop). High-vega structures therefore earn less or risk more, carry
+     fewer lots and must still clear `min_option_rr`.
   5. Management on the spot index: stop at the far side of the range; T1 at
      1R books half and moves the stop to cost; the rest exits at T2 (pulled
      in to a level between 1.2R and 2R), the stop, the theta time stop
@@ -87,6 +95,9 @@ DEFAULTS = dict(
     max_spread_pct=5.0,      # skip when an option's bid/ask spread exceeds this % of its price
     max_premium_loss_pct=45.0,
     min_option_rr=1.5,       # premium reward to T2 per rupee risked, after charges
+    min_delta=0.10,          # net delta of the structure at or above: the premium must follow the index
+    max_theta_share=0.25,    # theta paid by the time stop, at most this share of the premium gain at T1
+    iv_shock_pct=5.0,        # vega: IV falls this % where the index rallies (calls' targets, puts' stop); 0 = off
     rate=0.065,
     chain_source='model',    # model (free, India VIX) | upstox (opt-in; needs an Upstox account token)
     send_skips=True,         # one line when a breakout is not traded, with the reason
@@ -145,12 +156,16 @@ def settings(value=None):
     if not P.hhmm(cfg['brief_time']) < dt.time(9, 15) <= P.hhmm(cfg['entry_deadline']) < P.hhmm(cfg['square_off']) <= dt.time(15, 25):
         raise ValueError('index_fno needs brief_time < 09:15 <= entry_deadline < square_off <= 15:25')
     for key, high in (('min_range_pct', 5), ('max_range_pct', 5), ('breakout_buffer_pct', 1), ('buy_iv_max', 100),
-                      ('max_spread_pct', 50), ('max_premium_loss_pct', 90), ('rate', 0.2), ('min_option_rr', 10)):
+                      ('max_spread_pct', 50), ('max_premium_loss_pct', 90), ('rate', 0.2), ('min_option_rr', 10),
+                      ('min_delta', 1), ('max_theta_share', 1)):
         _positive(cfg, key, high)
     if cfg['min_range_pct'] >= cfg['max_range_pct']:
         raise ValueError('index_fno.min_range_pct must be below max_range_pct')
     if cfg['max_vix'] is not None:
         _positive(cfg, 'max_vix', 100)
+    v = cfg['iv_shock_pct']
+    if not isinstance(v, (int, float)) or isinstance(v, bool) or not 0 <= v <= 50:
+        raise ValueError('index_fno.iv_shock_pct must be a number from 0 to 50')
     t = cfg['target_r']
     if (not isinstance(t, list) or len(t) != 2 or any(not isinstance(x, (int, float)) or isinstance(x, bool) for x in t)
             or not 0 < t[0] < t[1] <= 5):
@@ -364,10 +379,33 @@ def targets(side, entry, risk, ctx, summary, cfg):
     return round(t1, 2), round(t2, 2), capped
 
 
-def _value(legs, spot, at, expiry, rate):
+SESSION_MINUTES = 375      # 09:15-15:30: theta is paid over one session per calendar day of decay (conservative)
+
+
+def _value(legs, spot, at, expiry, rate, iv_mult=1.0):
     t = O.years_to(expiry, at)
-    return sum((1 if leg['action'] == 'BUY' else -1) * O.bs_price(spot, leg['strike'], t, leg['sigma'], leg['type'], rate)
-               for leg in legs)
+    return sum((1 if leg['action'] == 'BUY' else -1)
+               * O.bs_price(spot, leg['strike'], t, leg['sigma'] * iv_mult, leg['type'], rate) for leg in legs)
+
+
+def structure_greeks(legs, spot, now, expiry, rate):
+    """Net Greeks per unit of the structure: delta, gamma (per index point), theta (per day), vega (per IV point).
+
+    Each leg uses the chain's Greeks when the quote carried all four, else Black-Scholes at the leg's IV."""
+    t = O.years_to(expiry, now)
+    net = dict(delta=0.0, gamma=0.0, theta=0.0, vega=0.0)
+    for leg in legs:
+        q = leg.pop('_quote_greeks', None) or {}
+        if all(q.get(k) is not None for k in net):
+            g, leg['greeks_from'] = q, 'chain'
+        else:
+            g, leg['greeks_from'] = O.bs_greeks(spot, leg['strike'], t, leg['sigma'], leg['type'], rate), 'model'
+        leg.update(delta=round(g['delta'], 3), gamma=round(g['gamma'], 5), theta=round(g['theta'], 2),
+                   vega=round(g['vega'], 2))
+        sign = 1 if leg['action'] == 'BUY' else -1
+        for k in net:
+            net[k] += sign * g[k]
+    return net
 
 
 def _price_structure(kind_name, legs, name, side, entry, stop, t1, t2, now, market, vix, expiry, lot, budget, cfg):
@@ -388,7 +426,9 @@ def _price_structure(kind_name, legs, name, side, entry, stop, t1, t2, now, mark
         iv = q.get('iv')
         sigma = iv / 100 if iv else O.implied_vol(ltp, entry, leg['strike'], O.years_to(expiry, now), kind, cfg['rate'])
         leg['sigma'] = sigma or (vix or 15) / 100 * c['iv_scale']
-        leg.update(iv=round(leg['sigma'] * 100, 2), delta=q.get('delta'), oi=q.get('oi'))
+        leg.update(iv=round(leg['sigma'] * 100, 2), oi=q.get('oi'))
+        if market.source != 'model':
+            leg['_quote_greeks'] = {k: q.get(k) for k in ('delta', 'gamma', 'theta', 'vega')}
     spread = len(legs) == 2
     net = legs[0]['price'] - (legs[1]['price'] if spread else 0)
     if net <= 0:
@@ -396,12 +436,33 @@ def _price_structure(kind_name, legs, name, side, entry, stop, t1, t2, now, mark
     # Model each leg from its entry price, so the stop/targets are consistent with the quotes paid.
     shift = net - _value(legs, entry, now, expiry, cfg['rate'])
     at = lambda minutes: now + dt.timedelta(minutes=minutes)
-    stop_p = max(0.05, _value(legs, stop, at(20), expiry, cfg['rate']) + shift)
-    t1_p = _value(legs, t1, at(30), expiry, cfg['rate']) + shift
-    t2_p = _value(legs, t2, at(60), expiry, cfg['rate']) + shift
+    # Vega: IV is cut where the index rallies (calls: the targets; puts: the stop), as India VIX usually falls then.
+    crush = 1 - cfg['iv_shock_pct'] / 100
+    up_iv, down_iv = (crush, 1.0) if kind == 'CE' else (1.0, crush)
+    stop_p = max(0.05, _value(legs, stop, at(20), expiry, cfg['rate'], down_iv) + shift)
+    t1_p = _value(legs, t1, at(30), expiry, cfg['rate'], up_iv) + shift
+    t2_p = _value(legs, t2, at(60), expiry, cfg['rate'], up_iv) + shift
+    # Rupee effect of that IV fall per unit: on the targets for a call, on the stop for a put.
+    if kind == 'CE':
+        vega_cost = _value(legs, t2, at(60), expiry, cfg['rate']) + shift - t2_p
+    else:
+        vega_cost = max(0.05, _value(legs, stop, at(20), expiry, cfg['rate']) + shift) - stop_p
     loss_pct = (net - stop_p) / net * 100
     if not spread and loss_pct > cfg['max_premium_loss_pct']:
         return None, '%s: the spot stop costs %.0f%% of the premium' % (kind_name, loss_pct)
+    g = structure_greeks(legs, entry, now, expiry, cfg['rate'])
+    delta = abs(g['delta'])
+    if delta < cfg['min_delta']:
+        return None, '%s: net Δ%.2f, the premium barely follows %s (min %.2f)' % (
+            kind_name, delta, c['short'], cfg['min_delta'])
+    gain_t1 = t1_p - net
+    if gain_t1 <= 0:
+        return None, '%s: no premium gain at T1' % kind_name
+    theta_to_stop = max(0.0, -g['theta']) * cfg['time_stop_minutes'] / SESSION_MINUTES
+    theta_share = theta_to_stop / gain_t1
+    if theta_share > cfg['max_theta_share']:
+        return None, '%s: theta by the time stop eats %.0f%% of the T1 gain (max %.0f%%)' % (
+            kind_name, theta_share * 100, cfg['max_theta_share'] * 100)
     orders = 2 * len(legs)
     per_lot = (net - stop_p) * lot + O.charges(net * lot, stop_p * lot, orders)
     reward = (t2_p - net) * lot - O.charges(net * lot, t2_p * lot, orders)
@@ -415,10 +476,21 @@ def _price_structure(kind_name, legs, name, side, entry, stop, t1, t2, now, mark
     warnings = []
     if spread:
         warnings.append('max profit %s per lot' % P.inr((abs(legs[1]['strike'] - legs[0]['strike']) - net) * lot, 0))
+    units = lot * lots
+    move = abs(t1 - entry)
+    greeks = dict(
+        delta=round(delta, 3), gamma=round(g['gamma'], 5), theta=round(g['theta'], 2), vega=round(g['vega'], 2),
+        delta_at_t1=round(min(1.0, max(0.0, delta + g['gamma'] * move)), 3),
+        rs_per_point=round(delta * units, 0), theta_day=round(g['theta'] * units, 0),
+        theta_to_time_stop=round(theta_to_stop * units, 0), theta_share=round(theta_share, 3),
+        vega_rs=round(g['vega'] * units, 0), iv_shock_pct=cfg['iv_shock_pct'],
+        iv_crush_rs=round(vega_cost * units, 0),
+        breakeven_pts_hr=round(max(0.0, -g['theta']) / (SESSION_MINUTES / 60) / delta, 1),
+        source='chain' if all(leg['greeks_from'] == 'chain' for leg in legs) else 'model')
     return dict(kind='DEBIT_SPREAD' if spread else 'LONG', style=kind_name, option_type=kind, expiry=expiry.isoformat(),
                 lot=lot, lots=lots, legs=legs, net=round(net, 2), stop=round(stop_p, 2), t1=round(t1_p, 2),
                 t2=round(t2_p, 2), shift=round(shift, 4), risk=round(per_lot * lots, 0), budget=budget,
-                rr=round(rr, 2), source=market.source, label=market.label, warnings=warnings), None
+                rr=round(rr, 2), greeks=greeks, source=market.source, label=market.label, warnings=warnings), None
 
 
 def plan_option(name, side, entry, stop, t1, t2, now, market, vix, budget, cfg, calendar):
@@ -492,6 +564,25 @@ def contract_name(name, opt, cfg):
     return '%s %s %d/%d %s spread' % (c['short'], expiry, legs[0]['strike'], legs[1]['strike'], legs[0]['type'])
 
 
+def _rs(v):
+    return ('−' if v < 0 else '') + P.inr(abs(v), 0)
+
+
+def greeks_lines(gk, kind, short):
+    """The position's Greeks and what they mean for this trade, in rupees."""
+    crush = ''
+    if gk.get('iv_shock_pct') and gk.get('iv_crush_rs'):
+        crush = '; a %g%% IV drop (priced in) costs ≈%s at %s' % (gk['iv_shock_pct'], P.inr(gk['iv_crush_rs'], 0),
+                                                                  'T2' if kind == 'CE' else 'the stop')
+    return [
+        '📐 Greeks%s: Δ%.2f → %.2f at T1 (Γ) · %s per %s point · Θ %s/day, ≈%s by the time stop (%.0f%% of the T1 gain)' % (
+            '' if gk.get('source') == 'chain' else ' (model)', gk['delta'], gk['delta_at_t1'], P.inr(gk['rs_per_point'], 0),
+            short, _rs(gk['theta_day']), P.inr(gk['theta_to_time_stop'], 0), gk['theta_share'] * 100),
+        '🌡 Vega %s per IV point%s · %s must move %s pts/hr your way to cover theta' % (
+            P.inr(gk['vega_rs'], 0), crush, short, _num(gk['breakeven_pts_hr'])),
+    ]
+
+
 def signal_text(name, sig, opt, cfg, rng, opening, range_end, warning):
     c = cfg['contracts'][name]
     side, lots, lot = sig['side'], opt['lots'], opt['lot']
@@ -529,6 +620,9 @@ def signal_text(name, sig, opt, cfg, rng, opening, range_end, warning):
             opening.strftime('%H:%M'), range_end.strftime('%H:%M'), _num(rng['low']), _num(rng['high']),
             _num(sig['entry']), ' · '.join(html.escape(w) for w in sig['why']), html.escape(sig['regime'])),
     ]
+    gk = opt.get('greeks')
+    if gk:
+        lines += greeks_lines(gk, opt['option_type'], c['short'])
     if model:
         lines.append('ℹ️ Premiums are estimates (IV %s%%%s). Your broker\'s price may differ; the %s levels are the plan.' % (
             _num(legs[0]['iv']), ', Δ%.2f: ≈₹%.2f per %s point' % (delta, delta, c['short']) if delta else '', c['short']))
@@ -717,8 +811,9 @@ def manage(name, rec, candles, now, day, cfg, market):
                 _num(fav), _num(sig['target2'])))
             break
         if not sig['t1_hit'] and end >= time_stop:
-            close('TIME_STOP', x['close'], end, 'Spot %s after %d minutes without T1: theta is now the main risk. Exit.' % (
-                _num(x['close']), cfg['time_stop_minutes']))
+            close('TIME_STOP', x['close'], end, 'Spot %s after %d minutes without T1: theta%s is now the main risk. Exit.' % (
+                _num(x['close']), cfg['time_stop_minutes'],
+                ' (≈%s paid)' % P.inr(opt['greeks']['theta_to_time_stop'], 0) if opt.get('greeks') else ''))
             break
         if end >= square:
             close('SQUARE_OFF', x['close'], end, 'Exit what is left at spot %s.' % _num(x['close']))
@@ -731,6 +826,37 @@ def manage(name, rec, candles, now, day, cfg, market):
 
 
 # --------------------------------------------------------------------------- brief
+
+def atm_greeks(name, spot, expiry, now, market, cfg):
+    """ATM call and put at the expiry in use, with Greeks (chain's when given, else Black-Scholes)."""
+    strike = O.round_strike(spot, cfg['contracts'][name]['step'])
+    t = O.years_to(expiry, now)
+    out = dict(strike=strike)
+    for kind in ('CE', 'PE'):
+        q = market.quote(name, expiry, strike, kind, spot, now)
+        if any(q.get(k) is None for k in ('delta', 'gamma', 'theta', 'vega')):
+            sigma = (q.get('iv') or 0) / 100 or (market.sigma(name) if hasattr(market, 'sigma') else 0)
+            if not sigma:
+                return None
+            q = dict(q, **O.bs_greeks(spot, strike, t, sigma, kind, cfg['rate']))
+        out[kind] = {k: q[k] for k in ('ltp', 'delta', 'gamma', 'theta', 'vega')}
+    return out
+
+
+def atm_text(atm, ctx, c, model):
+    ce, pe = atm['CE'], atm['PE']
+    theta = (abs(ce['theta']) + abs(pe['theta'])) / 2
+    pts_hr = theta / (SESSION_MINUTES / 60) / max(abs(ce['delta']), 0.05)
+    lines = ['ATM %d: CE %s₹%s Δ%.2f · PE %s₹%s Δ%.2f · Γ %.5f (Δ %+.2f per 100 pts)' % (
+        atm['strike'], '≈' if model else '', _num(ce['ltp']), ce['delta'], '≈' if model else '', _num(pe['ltp']),
+        pe['delta'], ce['gamma'], ce['gamma'] * 100)]
+    hourly = ctx.get('atr') / (SESSION_MINUTES / 60) if ctx.get('atr') else None
+    lines.append('Θ −₹%s/day (%s/lot) · vega ₹%s per IV pt (%s/lot) · theta needs %s pts/hr%s' % (
+        _num(theta), P.inr(theta * c['lot'], 0), _num(ce['vega']), P.inr(ce['vega'] * c['lot'], 0), _num(pts_hr),
+        ' vs ~%s pts/hr ATR pace: %s' % (_num(hourly, 0), 'buying is cheap' if pts_hr <= 0.1 * hourly else
+                                         'theta is heavy, prefer ITM or spreads') if hourly else ''))
+    return lines
+
 
 def brief_text(cfg, now, contexts, vix, markets_info, warning, late=False, doc=None):
     regime, regime_text = vix_regime(vix, cfg)
@@ -760,6 +886,8 @@ def brief_text(cfg, now, contexts, vix, markets_info, warning, late=False, doc=N
         if info.get('expiry'):
             lines.append('Expiry used: %s (%d sessions) · lot %d' % (
                 dt.date.fromisoformat(info['expiry']).strftime('%d %b'), info['dte'], info['lot']))
+        if info.get('atm'):
+            lines += atm_text(info['atm'], ctx, dict(c, lot=info.get('lot') or c['lot']), cfg['chain_source'] == 'model')
         s = info.get('summary')
         if s:
             lines.append('PCR %.2f · max pain %s · call wall %s · put wall %s' % (
@@ -985,6 +1113,8 @@ def tick(cfg, now, calendar=None, candle_loader=None, context_loader=None, marke
                 info[name] = dict(expiry=expiry.isoformat(), lot=lot,
                                   dte=O.trading_days_between(now.date(), expiry, calendar),
                                   summary=market.summary(name, expiry, ctx.get('close') or 0))
+                if ctx.get('close'):
+                    info[name]['atm'] = atm_greeks(name, ctx['close'], expiry, now, market, fno)
             except (ValueError, OSError, KeyError, TypeError):
                 pass
         late = now >= range_end + SETTLE

@@ -118,7 +118,7 @@ class Options(unittest.TestCase):
     def test_upstox_chain_is_parsed_and_quoted(self):
         chain = [{'strike_price': 24100, 'underlying_spot_price': 24095.5, 'call_options': {
             'instrument_key': 'NSE_FO|1', 'market_data': {'ltp': 150.0, 'bid_price': 149.5, 'ask_price': 150.5, 'oi': 5000},
-            'option_greeks': {'iv': 13.2, 'delta': 0.52}}, 'put_options': {
+            'option_greeks': {'iv': 13.2, 'delta': 0.52, 'gamma': 0.0007, 'theta': -11.5, 'vega': 16.2}}, 'put_options': {
             'market_data': {'ltp': 140.0, 'bid_price': 139.0, 'ask_price': 141.0, 'oi': 7000}, 'option_greeks': {'iv': 14.0}}}]
         contracts = [{'expiry': '2026-11-23', 'lot_size': 65}, {'expiry': '2026-12-01', 'lot_size': 65}]
         calls = []
@@ -130,6 +130,7 @@ class Options(unittest.TestCase):
         self.assertEqual(m.expiry('NIFTY 50', DAY), (dt.date(2026, 12, 1), 65))
         q = m.quote('NIFTY 50', dt.date(2026, 12, 1), 24100, 'CE', 24100, at(9, 35))
         self.assertEqual((q['ask'], q['iv'], q['oi']), (150.5, 13.2, 5000))
+        self.assertEqual((q['gamma'], q['theta'], q['vega']), (0.0007, -11.5, 16.2))
         m.quote('NIFTY 50', dt.date(2026, 12, 1), 24100, 'PE', 24100, at(9, 35))
         self.assertEqual(len([c for c in calls if c.startswith('chain')]), 1)      # cached for a minute
         self.assertIn('NSE_INDEX%7CNifty%2050', calls[0])
@@ -193,6 +194,17 @@ class Rules(unittest.TestCase):
         self.assertIn('🛑 Stop: NIFTY below 24,000.0 (premium ≈₹', text)
         self.assertIn('Premiums are estimates (IV 13.0%, Δ0.5', text)
         self.assertIn('per NIFTY point', text)
+        gk = opt['greeks']
+        self.assertEqual(gk['source'], 'model')
+        self.assertAlmostEqual(gk['delta'], 0.54, places=2)
+        self.assertGreater(gk['delta_at_t1'], gk['delta'])                 # long gamma: delta grows into T1
+        self.assertLess(gk['theta_day'], 0)
+        self.assertLess(gk['theta_share'], 0.25)
+        self.assertAlmostEqual(gk['rs_per_point'], gk['delta'] * opt['lots'] * opt['lot'], delta=2)
+        self.assertIn('📐 Greeks (model): Δ0.54 → 0.6', text)
+        self.assertIn('by the time stop', text)
+        self.assertIn('a 5% IV drop (priced in) costs', text)
+        self.assertIn('pts/hr your way to cover theta', text)
         self.assertNotIn('UPSTOX', text.upper())
         self.assertLess(len(text), P.TELEGRAM_LIMIT)
 
@@ -204,13 +216,52 @@ class Rules(unittest.TestCase):
         self.assertIn('prefer ITM or spreads', texts[0])
 
     def test_debit_spread_when_only_it_fits_the_budget(self):
-        rec, texts = run(RANGE + [BREAKOUT], at(9, 36), vix_level=20.0, ctx=context(), budget=3000)
+        rec, texts = run(RANGE + [BREAKOUT], at(9, 36), vix_level=20.0, ctx=context(), budget=3000, min_delta=0.05)
         opt = rec['signal']['option']
         self.assertEqual(opt['kind'], 'DEBIT_SPREAD')
         self.assertEqual([(l['action'], l['strike']) for l in opt['legs']], [('BUY', 24100), ('SELL', 24300)])
         self.assertLessEqual(opt['risk'], 3000)
         self.assertIn('24100/24300 CE spread', texts[0])
         self.assertIn('max profit', texts[0])
+
+    def test_greeks_refuse_low_delta_and_heavy_theta(self):
+        # Rich IV, small budget: the only fitting structure is a 4-strike spread with net delta ~0.09.
+        rec, _ = run(RANGE + [BREAKOUT], at(9, 36), vix_level=20.0, ctx=context(), budget=3000)
+        self.assertEqual(rec['status'], 'SKIPPED_OPTION')
+        self.assertIn('net Δ0.09, the premium barely follows NIFTY', rec['note'])
+        # The ATM buy pays too much theta; the spread's sold leg collects most of it back.
+        rec, _ = run(RANGE + [BREAKOUT], at(9, 36), ctx=context(), max_theta_share=0.01)
+        self.assertEqual(rec['signal']['option']['kind'], 'DEBIT_SPREAD')
+        self.assertLessEqual(rec['signal']['option']['greeks']['theta_share'], 0.01)
+        rec, _ = run(RANGE + [BREAKOUT], at(9, 36), ctx=context(), max_theta_share=0.001)
+        self.assertEqual(rec['status'], 'SKIPPED_OPTION')
+        self.assertIn('ATM buy: theta by the time stop eats 4% of the T1 gain', rec['note'])
+
+    def test_vega_cuts_iv_where_the_index_rallies(self):
+        base = run(RANGE + [BREAKOUT], at(9, 36), ctx=context(), iv_shock_pct=0)[0]['signal']['option']
+        call = run(RANGE + [BREAKOUT], at(9, 36), ctx=context())[0]['signal']['option']
+        self.assertEqual(call['stop'], base['stop'])                       # a call's stop is a falling index
+        self.assertLess(call['t2'], base['t2'])                            # its T2 is a rally: lower IV
+        self.assertLess(call['rr'], base['rr'])
+        self.assertGreater(call['greeks']['iv_crush_rs'], 0)
+        bear = [candle(9, 30, 24010, 24015, 23960, 23970)]
+        ctx = context(trend='down', low=23000.0)
+        base = run(RANGE + bear, at(9, 36), ctx=ctx, iv_shock_pct=0)[0]['signal']['option']
+        put = run(RANGE + bear, at(9, 36), ctx=ctx)[0]['signal']['option']
+        self.assertEqual(put['option_type'], 'PE')
+        self.assertLess(put['stop'], base['stop'])                         # a put's stop is a rally: lower IV
+        self.assertEqual(put['t2'], base['t2'])
+        self.assertGreaterEqual(put['risk'] / put['lots'], base['risk'] / base['lots'])
+
+    def test_bs_greeks_match_finite_differences(self):
+        s, k, t, v = 24100, 24050, 6 / 365, 0.14
+        for kind in ('CE', 'PE'):
+            g = O.bs_greeks(s, k, t, v, kind)
+            px = lambda s=s, t=t, v=v: O.bs_price(s, k, t, v, kind)
+            self.assertAlmostEqual(g['delta'], (px(s + 0.5) - px(s - 0.5)), places=4)
+            self.assertAlmostEqual(g['gamma'], px(s + 1) - 2 * px() + px(s - 1), places=5)
+            self.assertAlmostEqual(g['vega'], (px(v=v + 0.0005) - px(v=v - 0.0005)) * 10, places=2)
+            self.assertAlmostEqual(g['theta'], (px(t=t - 1e-5) - px(t=t + 1e-5)) / 2e-5 / 365, places=2)
 
     def test_poor_reward_to_risk_structures_are_refused(self):
         rec, texts = run(RANGE + [BREAKOUT], at(9, 36), ctx=context(), min_option_rr=5.0)
@@ -234,7 +285,7 @@ class Rules(unittest.TestCase):
         rec, _ = run(RANGE + [BREAKOUT], at(9, 36), ctx=context(high=24150.0))
         self.assertEqual(rec['status'], 'SKIPPED_WEAK')
         self.assertIn('PDH 24,150.0 only 0.5R away', rec['note'])
-        rec, texts = run(RANGE + [BREAKOUT], at(9, 36), ctx=context(high=24250.0))
+        rec, texts = run(RANGE + [BREAKOUT], at(9, 36), ctx=context(high=24250.0), iv_shock_pct=0)
         self.assertEqual((rec['signal']['target2'], rec['signal']['t2_level']), (24250.0, 'PDH'))
         self.assertIn('just before PDH', texts[0])
 
@@ -525,7 +576,7 @@ class Desk(unittest.TestCase):
             base = P.load_config(None)
             base['recorder'] = dict(base['recorder'], state_dir=str(Path(d) / 'rec'))
             base['index_fno'] = dict(base['index_fno'], state_dir=str(Path(d) / 'fno'))
-            contexts = {'NIFTY 50': context(), 'NIFTY BANK': context(close=52000.0, high=52500.0, low=51500.0),
+            contexts = {'NIFTY 50': dict(context(), atr=250.0), 'NIFTY BANK': context(close=52000.0, high=52500.0, low=51500.0),
                         'INDIA VIX': dict(close=13.4)}
             kw = dict(calendar=DEFAULT_CALENDAR, candle_loader=lambda *a, **k: [],
                       context_loader=lambda *a: contexts,
@@ -536,6 +587,10 @@ class Desk(unittest.TestCase):
             self.assertIn('VIX 13.4: premiums cheap', texts[0])
             self.assertIn('Expiry used: 01 Dec', texts[0])
             self.assertIn('PDH 24,500.0', texts[0])
+            self.assertIn('ATM 24050: CE ≈₹', texts[0])
+            self.assertIn('Γ 0.000', texts[0])
+            self.assertIn('theta needs 3.0 pts/hr vs ~40 pts/hr ATR pace: buying is cheap', texts[0])
+            self.assertIn('ATM 52000: CE ≈₹', texts[0])
             F.save_state(base['index_fno']['state_dir'], doc)
             self.assertEqual(F.tick(base, at(9, 8), **kw)[1], [])
 

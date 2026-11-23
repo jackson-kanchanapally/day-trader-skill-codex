@@ -565,6 +565,20 @@ walls. Daily data comes from NSE's historical MCP.
      bleed) with a debit spread at least four strikes wide (the sold leg
      offsets IV), and pick the better reward/risk.
 
+   **Greeks decide too.** Each candidate's net delta, gamma, theta and vega
+   (the chain's with Upstox, otherwise Black-Scholes at the IV used) are
+   checked before reward/risk:
+   - net delta below `min_delta` (0.10) is refused: the premium barely
+     follows the index (a wide debit spread far from expiry can be ~0.09);
+   - theta paid by the time stop above `max_theta_share` (25%) of the premium
+     gain at T1 is refused, so the desk moves to a lower-theta structure or
+     skips;
+   - vega: India VIX usually falls as the index rises, so IV is cut by
+     `iv_shock_pct` (5%) wherever the index rallies: a call's T1/T2 and a
+     put's stop. High-vega structures therefore show less reward or more
+     risk, get fewer lots and must still clear `min_option_rr`. Set it to 0
+     to price at a constant IV.
+
    Naked option selling is never suggested. Lots are sized so the stop costs
    at most `risk_per_trade` including charges; when this is null the picks
    `risk_per_trade` is used. A structure that does not fit is skipped with the
@@ -579,6 +593,15 @@ walls. Daily data comes from NSE's historical MCP.
   1.2R and 2R)
 - a theta time stop (60 minutes without T1) and the square-off at 15:15
 - rupee risk, reward/risk, and the reasons for the grade
+- the position's Greeks in rupees: delta now and at T1 (gamma), rupees per
+  index point, theta per day and paid by the time stop (as a share of the T1
+  gain), vega per IV point with the cost of the modelled IV drop, and the
+  index points per hour needed to cover theta
+
+The brief also shows, per index, the ATM call and put at the expiry in use
+with delta, gamma, theta and vega per unit and per lot, and compares the
+points per hour that theta needs with the ATR pace (≤10% of it: buying is
+cheap; more: prefer ITM or spreads).
 
 Updates follow for T1, T2, stop, breakeven, time stop and square-off, with the
 exit premium and the P&L in rupees after estimated charges.

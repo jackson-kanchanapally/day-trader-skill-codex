@@ -8,7 +8,7 @@ Two price sources share one interface (`market.quote`, `market.expiry`,
                ratio of 20-day realised volatilities. Every price is an
                ESTIMATE and is labelled that way.
   UpstoxChain  Opt-in only (chain_source "upstox"), for people who already
-               have an Upstox account: live LTP, bid/ask, OI, IV and greeks.
+               have an Upstox account: live LTP, bid/ask, OI, IV and Greeks.
 
 NSE publishes no free official option-chain service, and its Terms of Use
 restrict automated collection from the website, so nothing here scrapes it.
@@ -60,6 +60,21 @@ def bs_delta(spot, strike, t, sigma, kind, rate=0.065):
         return (1.0 if spot > strike else 0.0) if kind == 'CE' else (-1.0 if spot < strike else 0.0)
     d1 = (math.log(spot / strike) + (rate + sigma * sigma / 2) * t) / (sigma * math.sqrt(t))
     return _cdf(d1) if kind == 'CE' else _cdf(d1) - 1
+
+
+def bs_greeks(spot, strike, t, sigma, kind, rate=0.065):
+    """Delta, gamma (delta per index point), theta (premium per calendar day) and vega (premium per IV point)."""
+    if sigma <= 0 or t <= 0:
+        return dict(delta=bs_delta(spot, strike, t, sigma, kind, rate), gamma=0.0, theta=0.0, vega=0.0)
+    root = math.sqrt(t)
+    d1 = (math.log(spot / strike) + (rate + sigma * sigma / 2) * t) / (sigma * root)
+    d2 = d1 - sigma * root
+    pdf = math.exp(-d1 * d1 / 2) / math.sqrt(2 * math.pi)
+    decay = -spot * pdf * sigma / (2 * root)
+    carry = rate * strike * math.exp(-rate * t)
+    theta = decay - carry * _cdf(d2) if kind == 'CE' else decay + carry * _cdf(-d2)
+    return dict(delta=_cdf(d1) if kind == 'CE' else _cdf(d1) - 1, gamma=pdf / (spot * sigma * root),
+                theta=theta / 365.0, vega=spot * pdf * root / 100)
 
 
 def implied_vol(price, spot, strike, t, kind, rate=0.065):
@@ -181,8 +196,9 @@ class ModelChain:
         sigma = self.sigma(name)
         t = years_to(expiry, now)
         price = bs_price(spot, strike, t, sigma, kind, self.cfg['rate'])
-        return dict(ltp=round(price, 2), bid=None, ask=None, iv=round(sigma * 100, 2),
-                    delta=round(bs_delta(spot, strike, t, sigma, kind, self.cfg['rate']), 3), oi=None)
+        g = bs_greeks(spot, strike, t, sigma, kind, self.cfg['rate'])
+        return dict(ltp=round(price, 2), bid=None, ask=None, iv=round(sigma * 100, 2), oi=None,
+                    delta=round(g['delta'], 3), gamma=g['gamma'], theta=g['theta'], vega=g['vega'])
 
     def summary(self, name, expiry, spot):
         return None
@@ -223,6 +239,7 @@ def parse_upstox_chain(data):
                 continue
             entry[side] = dict(ltp=md.get('ltp'), bid=md.get('bid_price') or None, ask=md.get('ask_price') or None,
                                oi=md.get('oi'), iv=greeks.get('iv'), delta=greeks.get('delta'),
+                               gamma=greeks.get('gamma'), theta=greeks.get('theta'), vega=greeks.get('vega'),
                                key=leg.get('instrument_key'))
         if entry:
             rows[float(strike)] = entry
