@@ -66,5 +66,19 @@
     "mcx_hours": ["09:00", "23:30"],
     "commands": true,
     "news": "flag"
+  },
+  "index_fno": {
+    "state_dir": "var/state/index_fno",
+    "indices": ["NIFTY 50", "NIFTY BANK"],
+    "vix_index": "INDIA VIX",
+    "range_minutes": 15,
+    "entry_deadline": "13:30",
+    "square_off": "15:15",
+    "min_range_pct": 0.15,
+    "max_range_pct": 1.2,
+    "max_vix": 25.0,
+    "target_r": [1.0, 2.0],
+    "fresh_minutes": 10,
+    "lot_size": {}
   }
 }

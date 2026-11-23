@@ -23,7 +23,7 @@
     "tests/test_research_store.py", "tests/test_research_lab.py", "tests/test_research_strategies.py", "tests/test_research_regimes.py",
     "tests/test_execution_golden.py", "tests/test_execution_policy.py", "tests/test_volume_calendar.py", "tests/test_liquidity.py",
     "tests/test_team.py", "tests/test_upstox.py", "tests/test_workflow.py", "tests/test_yahoo.py",
-    "tests/test_parity_forecast.py", "tests/test_parity_sessions.py", "tests/test_parity_scanner.py", "tests/test_parity_budget.py", "tests/test_parity_contracts.py", "tests/test_indian_parity.py", "tests/test_live_gap_closure.py", "tests/test_picks.py", "tests/test_gold.py", "tests/test_gold_news.py", "tests/test_gold_lab.py", "tests/test_gold_lab_improve.py"
+    "tests/test_parity_forecast.py", "tests/test_parity_sessions.py", "tests/test_parity_scanner.py", "tests/test_parity_budget.py", "tests/test_parity_contracts.py", "tests/test_indian_parity.py", "tests/test_live_gap_closure.py", "tests/test_picks.py", "tests/test_gold.py", "tests/test_gold_news.py", "tests/test_gold_lab.py", "tests/test_gold_lab_improve.py", "tests/test_index_fno.py"
   ],
   "synthetic_fixtures": [
     "tests/fixtures/india/synthetic.csv",

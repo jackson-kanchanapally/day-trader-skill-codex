@@ -284,6 +284,83 @@ function Session({ session }) {
   );
 }
 
+function AlertSwitches() {
+  const [state, setState] = useState(null),
+    [error, setError] = useState(""),
+    [saving, setSaving] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/alert-switches", { cache: "no-store", signal: controller.signal })
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || "Unable to read alert switches.");
+        setState(d);
+      })
+      .catch((e) => e.name !== "AbortError" && setError(e.message));
+    return () => controller.abort();
+  }, []);
+  async function toggle(item) {
+    if (saving) return;
+    setSaving(item.name);
+    setError("");
+    try {
+      const r = await fetch("/api/alert-switches", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json", "X-Trader-Token": state.token },
+        body: JSON.stringify({ name: item.name, enabled: !item.enabled }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Unable to save the alert switch.");
+      setState(d);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving("");
+    }
+  }
+  return (
+    <section className="panel alert-switches">
+      <div className="panel-head">
+        <h2>Telegram alert streams</h2>
+        <span className="micro">TAKES EFFECT WITHIN 30 SECONDS</span>
+      </div>
+      {error && (
+        <p className="notice error" role="alert">
+          {error}
+        </p>
+      )}
+      {!state ? (
+        !error && <p>Reading switches…</p>
+      ) : (
+        <ul>
+          {state.switches.map((item) => (
+            <li key={item.name}>
+              <div>
+                <b>{item.label}</b>
+                <small>{item.detail}</small>
+                {item.note && <small className="alert-switch-note">{item.note}</small>}
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={item.enabled}
+                aria-label={item.label}
+                className={`alert-switch ${item.enabled ? "on" : ""}`}
+                disabled={saving === item.name}
+                onClick={() => toggle(item)}
+              >
+                <span className="alert-switch-knob" />
+                <span className="alert-switch-text">{item.enabled ? "On" : "Off"}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export default function AlertTrades({ refreshToken }) {
   const [data, setData] = useState(null),
     [error, setError] = useState("");
@@ -330,6 +407,7 @@ export default function AlertTrades({ refreshToken }) {
           </p>
         </div>
       </div>
+      <AlertSwitches />
       {error && (
         <p className="notice error" role="alert">
           {error}

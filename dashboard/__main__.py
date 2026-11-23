@@ -13,6 +13,7 @@ from india.team import (ARTIFACTS, REQUIRED, VERDICTS, _source_check, load_sessi
 from .opportunities import OpportunityStore
 from .research import ResearchStore
 from .journal import paper_journal
+from india import alert_switches
 from india.picks import ledger as alert_ledger, load_config as picks_config
 from .runner import CodexRunner, RunnerError
 
@@ -30,6 +31,19 @@ def picks_state_dir():
     """Where india.picks keeps alerts and paper results (config/picks.json state_dir)."""
     state=Path(picks_settings()['state_dir'])
     return state if state.is_absolute() else REPO/state
+
+
+def switches_view(path, token):
+    """Alert switches plus whether their streams are configured to run at all."""
+    view=alert_switches.describe(path)
+    try:
+        cfg=picks_settings()
+        notes={'gold':None if cfg['gold'].get('enabled') else 'gold.enabled is false in config/picks.json, so no gold alert runs.',
+               'index_fno':None}
+    except (ValueError,OSError,KeyError,TypeError):
+        notes={'gold':'config/picks.json could not be read.','index_fno':'config/picks.json could not be read.'}
+    for item in view['switches']: item['note']=notes.get(item['name'])
+    return dict(view,token=token)
 ORDER=('scanner','news','analyst','entry','exit','timemachine','budget','risk','broker','alerts')
 
 
@@ -150,6 +164,10 @@ def handler(root, workspace=None, runner=None, picks_dir=None):
     workspace=Path(workspace if workspace is not None else Path(root)/'_scanner').resolve()
     research_store=ResearchStore(workspace,root,sessions,session_view)
     opportunity_store=OpportunityStore(workspace,research=research_store)
+    switch_token=runner.token if runner else secrets.token_urlsafe(32)
+    def switch_file():
+        state=picks_dir or picks_state_dir()
+        return Path(state).parent/alert_switches.FILENAME
     class Handler(BaseHTTPRequestHandler):
         def local_host(self):
             return self.headers.get('Host','') in ('127.0.0.1:'+str(self.server.server_port),'localhost:'+str(self.server.server_port))
@@ -175,6 +193,8 @@ def handler(root, workspace=None, runner=None, picks_dir=None):
                     self.respond(200,research_store.detail(unquote(url[len('/api/research/'):])));return
                 if url=='/api/journal':
                     self.respond(200,paper_journal(workspace));return
+                if url=='/api/alert-switches':
+                    self.respond(200,switches_view(switch_file(),switch_token));return
                 if url=='/api/alert-trades':
                     self.respond(200,alert_ledger(picks_dir or picks_state_dir(),picks_settings()));return
                 if url=='/api/sessions': self.respond(200,dict(sessions=sessions(root)));return
@@ -199,6 +219,8 @@ def handler(root, workspace=None, runner=None, picks_dir=None):
             # A page on another origin must not be able to start local work.
             origin = 'http://' + self.headers.get('Host','')
             supplied = self.headers.get('X-Trader-Token','')
+            if urlsplit(self.path).path=='/api/alert-switches':
+                self.switch(origin,supplied);return
             if (not runner or self.headers.get('Origin') != origin
                     or not secrets.compare_digest(supplied,runner.token)):
                 self.respond(403,dict(error='Open the local dashboard and retry this action.'));return
@@ -226,6 +248,23 @@ def handler(root, workspace=None, runner=None, picks_dir=None):
                 self.respond(404,dict(error='Unknown run action'))
             except (ValueError, OSError, TypeError, KeyError) as exc:
                 self.respond(409,dict(error=str(exc) if isinstance(exc,RunnerError) else 'Invalid or unavailable run request'))
+
+        def switch(self, origin, supplied):
+            if self.headers.get('Origin')!=origin or not secrets.compare_digest(supplied,switch_token):
+                self.respond(403,dict(error='Open the local dashboard and retry this action.'));return
+            if self.headers.get('Content-Type','').split(';')[0]!='application/json':
+                self.respond(415,dict(error='JSON request required'));return
+            try:
+                length=int(self.headers.get('Content-Length','0'))
+                if not 0<length<=1000:
+                    self.respond(413,dict(error='Request is too large or empty'));return
+                doc=json.loads(self.rfile.read(length))
+                if not isinstance(doc,dict) or set(doc)!={'name','enabled'}:
+                    raise ValueError('Send {"name": ..., "enabled": true|false}')
+                alert_switches.write(switch_file(),doc['name'],doc['enabled'])
+                self.respond(200,switches_view(switch_file(),switch_token))
+            except (ValueError,OSError,TypeError) as exc:
+                self.respond(409,dict(error=str(exc) if isinstance(exc,ValueError) and not isinstance(exc,json.JSONDecodeError) else 'Could not save the alert switch.'))
 
         def respond(self, code, value, mime='application/json'):
             body=json.dumps(value,allow_nan=False).encode() if mime=='application/json' else value

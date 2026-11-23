@@ -501,7 +501,70 @@ such a minute. A full-session run has not been checked.
   open, high, low and close.
 - Intraday history starts when the recorder starts. Yahoo keeps about 60 days
   of five-minute candles; nothing here gives years of intraday data.
-- No playbook reads this data yet.
+- `india/index_fno.py` reads the index candles when the index F&O switch is
+  on (next section).
+
+## Alert switches
+
+The dashboard's **Alert trades** page starts with **Telegram alert streams**,
+one switch per stream. Each switch is saved in
+`var/state/alert-switches.json` (beside the picks `state_dir`). The dashboard
+writes this file and the `--serve` scheduler reads it on every 30-second tick,
+so nothing needs a restart. Both Docker services mount `./var`.
+
+| Switch | Default | When off |
+| --- | --- | --- |
+| Gold futures signals | On | The gold morning alert, live level updates, failure notices and gold lab messages are not sent. No new gold paper trade is opened. The gold lab still logs its forward decisions, live watch still advances so old crossings are not replayed later, and `/gold`, `/price` and the other commands still answer. |
+| Index F&O signals | Off | `india.index_fno` does not run and its recorder is stopped. |
+
+The gold switch only works when `gold.enabled` is true in
+`config/picks.json`; the dashboard says so when it is not. The daily stock
+picks are not switched here.
+
+## Index F&O signals
+
+`india/index_fno.py` sends a paper-only NIFTY 50 / NIFTY BANK futures signal
+from the recorder's sampled five-minute NSE index candles. Per index, once per
+session:
+
+1. **Opening range.** The high and low of 09:15–09:30 (`range_minutes`). All
+   three candles must be usable, else no signal that day.
+2. **Filters.** Skip the day when the range is under `min_range_pct` (0.15%)
+   or over `max_range_pct` (1.2%), or when India VIX is above `max_vix` (25)
+   at the breakout.
+3. **Signal.** The first five-minute close above the range is BUY, below it
+   SELL, before `entry_deadline` (13:30). A breakout seen more than
+   `fresh_minutes` (10) late, because the switch was off or data was late, is
+   recorded as missed and not sent.
+4. **Exits.** Entry is that close and the stop is the other side of the range.
+   Half is booked at T1 (1R) and its stop moves to the entry; the rest exits at
+   T2 (2R), the stop, or `square_off` (15:15). A stop and a target inside one
+   candle count as the stop.
+
+Telegram gets the signal and then one message per step (T1, T2, stop,
+breakeven, square-off) with the result in index points and R, before costs.
+Set `lot_size`, for example `{"NIFTY 50": 65}`, to add rupee risk per lot.
+Check the current lot size on NSE first, because NSE revises it. State is kept
+in `var/state/index_fno/signals-YYYY-MM-DD.json`.
+
+When the switch is on and `recorder.enabled` is false, the scheduler starts an
+indices-only recorder (no Yahoo stock closes) and stops it when the switch goes
+off. Turn the switch on before 09:15, because a recorder started later misses
+the opening range and gives no signal that day. Try it without Telegram:
+
+```sh
+python3 -m india.index_fno --config config/picks.json --dry-run
+```
+
+Limits:
+
+- The levels are on the **spot index**, sampled from NSE's snapshot one to
+  three minutes behind. Futures trade at a premium to spot, so shift each level
+  by the current basis. Sampled candles are not exchange candles.
+- These rules have **no backtest yet**. Treat them as a paper experiment until
+  the recorded results show an edge after costs.
+- NSE describes its MCP data as informational, not for real-time trading
+  ([NOTICE.md](../NOTICE.md)).
 
 ## Limits
 

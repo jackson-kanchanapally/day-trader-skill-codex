@@ -80,6 +80,7 @@ DEFAULTS = {
     'settle_minutes': 10,            # --serve paper-trade cadence (5-30); live updates arrive this often
     'recorder': None,                # opt-in delayed snapshot recording; see config/picks.example.json
     'gold': None,                    # opt-in MCX GOLD PETAL swing alerts; see india/gold.py
+    'index_fno': None,               # NIFTY/BANK NIFTY futures signal rules; on/off is the dashboard switch (india/index_fno.py)
 }
 INDEX_FILES = {
     'nifty50': 'ind_nifty50list.csv', 'nifty100': 'ind_nifty100list.csv',
@@ -673,6 +674,8 @@ def load_config(path):
     cfg['recorder'] = recorder_settings(cfg['recorder'])
     from .gold import settings as gold_settings
     cfg['gold'] = gold_settings(cfg['gold'])
+    from .index_fno import settings as fno_settings
+    cfg['index_fno'] = fno_settings(cfg['index_fno'])
     return cfg
 
 
@@ -1277,7 +1280,7 @@ def make_recorder(cfg, calendar, now_fn=None, dry_run=False):
 
 def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=time.sleep,
           main_fn=None, iterations=None, log=lambda msg: print(msg, flush=True), recorder=None, gold_fn=None,
-          lab_fn=None):
+          lab_fn=None, fno_fn=None):
     """Long-running scheduler for a container: morning alert + settles every settle_minutes.
 
     The alert runs once per session between alert_time and entry_deadline on NSE
@@ -1293,6 +1296,11 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
     checks open gold paper trades every watch_minutes inside gold.mcx_hours.
     After the gold alert has run for the day, the gold strategy lab
     (india.gold_lab) logs its forward paper decisions, also at most 3 attempts.
+
+    While the dashboard's index_fno switch is on, india.index_fno runs on every
+    tick of an NSE session. It reads the recorder's index candles, so an
+    indices-only recorder is started for it when recorder.enabled is false,
+    and stopped again when the switch goes off.
     """
     main_fn = main_fn or main
     gold = cfg.get('gold') or {}
@@ -1315,6 +1323,16 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
     own_recorder = recorder is None and (cfg.get('recorder') or {}).get('enabled', False)
     if own_recorder:
         recorder = make_recorder(cfg, calendar, now_fn, dry_run='--dry-run' in base_args)
+    if fno_fn is None:
+        from . import index_fno as fno_module
+        fno_fn = fno_module.main
+    from . import alert_switches, index_fno
+    switch_file = alert_switches.path_for(cfg)
+    fno_recorder, fno_warned = None, False
+    if recorder is not None and own_recorder:
+        missing = set(index_fno.needed_indices(cfg)) - set(cfg['recorder']['indices'])
+        if missing:
+            log('index F&O signals need recorder.indices to include: %s' % ', '.join(sorted(missing)))
     log('scheduler started: alert %s IST on NSE trading days, settle every %d minutes%s' % (
         cfg['alert_time'], cfg['settle_minutes'],
         '; gold alert %s IST Mon-Fri' % gold['alert_time'] if gold.get('enabled') else ''))
@@ -1322,8 +1340,28 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
         n += 1
         now = now_fn()
         today = now.date()
-        if recorder is not None:
-            for job in (recorder.tick, recorder.stocks_tick):
+        try:
+            fno_on = alert_switches.enabled(switch_file, 'index_fno')
+        except ValueError:
+            fno_on = False
+        if fno_on and recorder is None and fno_recorder is None:
+            try:
+                fno_recorder = make_recorder(dict(cfg, recorder=dict(
+                    cfg['recorder'], enabled=True, feeds=['indices'], stock_source='off',
+                    indices=index_fno.needed_indices(cfg))), calendar, now_fn, dry_run='--dry-run' in base_args)
+                log('index F&O switch on: started an indices-only recorder')
+            except Exception as exc:
+                if not fno_warned:
+                    log('index F&O recorder failed to start: %r' % exc)
+                    fno_warned = True
+        elif not fno_on and fno_recorder is not None:
+            fno_recorder.close()
+            fno_recorder = None
+            log('index F&O switch off: stopped its recorder')
+        for active in (recorder, fno_recorder):
+            if active is None:
+                continue
+            for job in (active.tick, active.stocks_tick):
                 try:
                     result = job(now)
                     feed, status = result.get('feed'), result['status']
@@ -1387,6 +1425,16 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
                 gold_fn(base_args + ['--watch'])
             except Exception as exc:
                 log('gold watch crashed: %r' % exc)
+        try:
+            hours = calendar.hours(today, 'NSE') if fno_on else None
+        except ValueError:
+            hours = None
+        if hours and hours[0] <= now.time() < (dt.datetime.combine(
+                today, hhmm(cfg['index_fno']['square_off'])) + dt.timedelta(minutes=20)).time():
+            try:
+                fno_fn(base_args)
+            except Exception as exc:
+                log('index F&O run crashed: %r' % exc)
         if last_settle is None or now - last_settle >= every:
             last_settle = now
             try:
@@ -1398,6 +1446,8 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
             sleep(30)
     if own_recorder:
         recorder.close()
+    if fno_recorder is not None:
+        fno_recorder.close()
 
 
 def main(argv=None):
