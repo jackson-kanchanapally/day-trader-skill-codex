@@ -39,8 +39,19 @@ RANGE = [candle(9, 15, 24010, 24050, 24000, 24040), candle(9, 20, 24040, 24080, 
 BREAKOUT = candle(9, 30, 24070, 24110, 24065, 24100)      # strong close at 24100: entry 24100, stop 24000, 1R = 100
 
 
+# The tests exercise the mechanics on a 15-minute range with the far-side stop and a T2 exit;
+# the defaults (30-minute range, breakout-candle stop, trailing runner) are checked where named.
+LEGACY = dict(range_minutes=15, stop_mode='range', runner='target')
+
+
 def cfg(budget=100000, **kw):
-    return dict(F.settings(kw), _budget=budget)
+    return dict(F.settings(dict(LEGACY, **kw)), _budget=budget)
+
+
+def legacy_config():
+    base = P.load_config(None)
+    base['index_fno'] = dict(base['index_fno'], **LEGACY)
+    return base
 
 
 def run(candles, now, vix_level=13.0, rec=None, ctx=None, budget=100000, market=True, **kw):
@@ -264,6 +275,29 @@ class Rules(unittest.TestCase):
             self.assertAlmostEqual(g['vega'], (px(v=v + 0.0005) - px(v=v - 0.0005)) * 10, places=2)
             self.assertAlmostEqual(g['theta'], (px(t=t - 1e-5) - px(t=t + 1e-5)) / 2e-5 / 365, places=2)
 
+    def test_candle_stop_is_the_breakout_candle_at_least_a_quarter_inside(self):
+        rec, texts = run(RANGE + [BREAKOUT], at(9, 36), ctx=context(), stop_mode='candle')
+        # Range 24000-24080: a quarter inside is 24060; the breakout candle's low 24065 is shallower, so 24060.
+        self.assertEqual(rec['signal']['stop'], 24060)
+        deep = candle(9, 30, 24050, 24110, 24030, 24100)
+        rec, _ = run(RANGE + [deep], at(9, 36), ctx=context(), stop_mode='candle')
+        self.assertEqual(rec['signal']['stop'], 24030)
+
+    def test_trailing_runner_follows_candle_lows_after_t1(self):
+        up = [candle(9, 35, 24100, 24150, 24095, 24140), candle(9, 40, 24140, 24210, 24130, 24200),      # T1 24200
+              candle(9, 45, 24200, 24260, 24190, 24250), candle(9, 50, 24250, 24330, 24240, 24320),
+              candle(9, 55, 24320, 24325, 24230, 24240)]                                               # breaks 24240
+        rec, texts = run(RANGE + [BREAKOUT], at(9, 36), ctx=context(), runner='trail')
+        rec, later = run(RANGE + [BREAKOUT] + up, at(10, 6), rec=rec, ctx=context(), runner='trail')
+        texts += later
+        self.assertEqual(rec['status'], 'CLOSED')
+        self.assertIn('Runner: after T1 the rest trails each 5-min low', texts[0])
+        self.assertTrue(any('the rest trails behind each 5-minute low' in t for t in texts))
+        self.assertEqual(rec['signal']['events'][-1]['kind'], 'TRAIL')
+        self.assertEqual(rec['signal']['events'][-1]['spot'], 24240)                 # the 09:50 candle's low
+        self.assertIn('📈', texts[-1])
+        self.assertGreater(rec['pnl'], 0)
+
     def test_poor_reward_to_risk_structures_are_refused(self):
         rec, texts = run(RANGE + [BREAKOUT], at(9, 36), ctx=context(), min_option_rr=5.0)
         self.assertEqual(rec['status'], 'SKIPPED_OPTION')
@@ -349,6 +383,8 @@ class Rules(unittest.TestCase):
                 F.settings(bad)
         self.assertEqual(F.settings({'contracts': {'NIFTY 50': {'lot': 75}}})['contracts']['NIFTY 50']['step'], 50)
         self.assertEqual(P.load_config(None)['index_fno']['indices'], ['NIFTY 50', 'NIFTY BANK'])
+        d = F.settings()
+        self.assertEqual((d['range_minutes'], d['stop_mode'], d['runner'], d['one_loss_a_day']), (30, 'candle', 'trail', True))
 
 
 class RiskGuard(unittest.TestCase):
@@ -375,10 +411,49 @@ class RiskGuard(unittest.TestCase):
 
     def test_losses_stop_new_trades(self):
         lost = dict(status='CLOSED', pnl=-3200)
-        guard = F.risk_guard(self.doc(**{'NIFTY 50': lost}), self.fno(max_daily_loss=3000), 'NIFTY BANK')
+        guard = F.risk_guard(self.doc(**{'NIFTY 50': lost}), self.fno(max_daily_loss=3000, one_loss_a_day=False), 'NIFTY BANK')
         self.assertIn('daily loss cap ₹3,000 reached (lost ₹3,200', guard['_block'])
+        guard = F.risk_guard(self.doc(**{'NIFTY 50': dict(status='CLOSED', pnl=-400)}), self.fno(), 'NIFTY BANK')
+        self.assertIn('one loss a day: NIFTY already lost today', guard['_block'])
         won = dict(status='CLOSED', pnl=900)
         self.assertEqual(F.risk_guard(self.doc(**{'NIFTY 50': won}), self.fno(), 'NIFTY BANK'), {})
+
+    def test_discipline_weekly_stop_streak_and_drawdown(self):
+        fno = F.settings()
+        mon = dt.date(2026, 11, 23)
+        day = lambda n: mon + dt.timedelta(days=n)
+        # Last week +6R, then this week three losers: -1, -1, -1.2R.
+        hist = [(day(-7), 3.0, 3000), (day(-6), 3.0, 3000), (day(0), -1.0, -1000), (day(1), -1.0, -1000), (day(2), -1.2, -1200)]
+        d = F.discipline(fno, day(3), hist)
+        self.assertEqual((d['week_r'], d['streak'], d['drawdown_r'], d['equity_r']), (-3.2, 3, 3.2, 2.8))
+        self.assertIn('weekly stop: -3.2R this week', d['block'])
+        self.assertEqual(d['mult'], 0.5)
+        self.assertIsNone(F.discipline(fno, day(7), hist)['block'])            # a new week starts flat
+        self.assertEqual(F.discipline(fno, day(7), hist + [(day(3), 0.4, 400)])['mult'], 1.0)   # a winner resets
+        deep = [(day(-9), 2.0, 0)] + [(day(i), -0.9, 0) for i in range(-8, 0, 2)] + [(day(i), 0.1, 0) for i in range(-7, 0, 2)]
+        d = F.discipline(fno, day(0), deep)
+        self.assertEqual((d['streak'], d['mult']), (0, 1.0))                  # 3.2R below the peak: under 5R
+        d = F.discipline(dict(fno, drawdown_half_r=3.0), day(0), deep)
+        self.assertIn('below the equity peak: half size', d['notes'][0])
+        off = F.discipline(dict(fno, weekly_loss_limit_r=None, streak_half_after=None, drawdown_half_r=None), day(3), hist)
+        self.assertEqual((off['block'], off['mult']), (None, 1.0))
+
+    def test_trade_history_reads_closed_desk_trades_before_today(self):
+        with tempfile.TemporaryDirectory() as d:
+            for day, recs in (('2026-11-19', {'NIFTY 50': dict(status='CLOSED', r=-1.0, pnl=-900, signal=dict(time='a'))}),
+                              ('2026-11-20', {'NIFTY 50': dict(status='SKIPPED_WEAK'),
+                                              'NIFTY BANK': dict(status='CLOSED', r=0.6, pnl=500, signal=dict(time='b'))}),
+                              ('2026-11-23', {'NIFTY 50': dict(status='CLOSED', r=2.0, pnl=2000, signal=dict(time='c'))})):
+                F.save_state(d, dict(date=day, indices=recs))
+            hist = F.trade_history(d, dt.date(2026, 11, 23))
+            self.assertEqual(hist, [(dt.date(2026, 11, 19), -1.0, -900), (dt.date(2026, 11, 20), 0.6, 500)])
+
+    def test_global_read_marks_the_overnight_mood(self):
+        self.assertEqual(F.global_read({'S&P 500': -1.4, 'Nikkei': -0.3})[1], 'risk-off')
+        self.assertEqual(F.global_read({'S&P 500': 0.2, 'US VIX': 12.0})[1], 'risk-off')
+        line, mood = F.global_read({'S&P 500': 1.1, 'Crude': 2.0})
+        self.assertEqual((line, mood), ('Global: S&P 500 +1.1% · Crude +2.0%', 'risk-on'))
+        self.assertEqual(F.global_read({}), (None, 'unknown'))
 
     def test_second_index_breaking_out_together_is_blocked(self):
         rows = RANGE + [BREAKOUT] + [candle(int(x['time'][11:13]), int(x['time'][14:16]), x['open'] * 2.5, x['high'] * 2.5,
@@ -386,7 +461,7 @@ class RiskGuard(unittest.TestCase):
                                      for x in RANGE + [BREAKOUT]]
         rows.append(candle(9, 15, 13.0, 13.0, 13.0, 13.0, symbol='INDEX:INDIA VIX'))
         with tempfile.TemporaryDirectory() as d:
-            base = P.load_config(None)
+            base = legacy_config()
             base['risk_per_trade'] = 20000
             base['index_fno'] = dict(base['index_fno'], state_dir=str(Path(d) / 'fno'))
             contexts = {'NIFTY 50': dict(context(), rv20=12.0),
@@ -415,7 +490,7 @@ class Backtest(unittest.TestCase):
         future = dict(date=DAY.isoformat(), open=1.0, high=1.0, low=1.0, close=1.0)    # must never be used
         daily = {'NIFTY 50': bars(24050.0) + [future], 'NIFTY BANK': bars(60100.0) + [future],
                  'INDIA VIX': bars(13.0) + [future]}
-        cfg = P.load_config(None)
+        cfg = legacy_config()
         cfg['risk_per_trade'] = 50000
         cfg['index_fno'] = dict(cfg['index_fno'], min_score=0)
         rep = B.run(cfg, dt.datetime.combine(DAY + dt.timedelta(days=1), dt.time(9), IST), DEFAULT_CALENDAR,
@@ -479,12 +554,12 @@ def replay_data():
     return intraday, daily
 
 
-def fake_model(p, trained_on=100):
+def fake_model(p, trained_on=100, proven=True):
     """A saved-model document whose P(win) is `p` for any breakout."""
     from india import index_fno_learn as L
     z = math.log(p / (1 - p))
     return dict(features=list(L.FEATURES), w=[z] + [0.0] * len(L.FEATURES), mu=[0.0] * len(L.FEATURES),
-                sd=[1.0] * len(L.FEATURES), trained_on=trained_on, weights=[])
+                sd=[1.0] * len(L.FEATURES), trained_on=trained_on, weights=[], proven=proven)
 
 
 def synthetic_rows(days=40, seed=1):
@@ -503,9 +578,15 @@ def synthetic_rows(days=40, seed=1):
 
 
 class Learning(unittest.TestCase):
-    def decide(self, p, learning='decide', ctx=None):
+    def setUp(self):
+        from india import index_fno_learn as L
+        patcher = mock.patch.object(L, 'PROOF_RUNS', 10)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def decide(self, p, learning='decide', ctx=None, proven=True):
         c = cfg(learning=learning)
-        c['_model'] = fake_model(p)
+        c['_model'] = fake_model(p, proven=proven)
         rec = {}
         vix = [candle(9, 15, 13.0, 13.0, 13.0, 13.0, symbol='INDEX:INDIA VIX')]
         texts = F.process('NIFTY 50', rec, RANGE + [BREAKOUT], vix, at(9, 36), OPEN, c, ctx=ctx or context(),
@@ -526,6 +607,24 @@ class Learning(unittest.TestCase):
         self.assertFalse(rec['signal']['rules_take'])
         self.assertIn('🧠 Learned model: P(win) 0.70 from 100 past breakouts · decides (take at 0.55+); '
                       'the grade rule alone would have skipped', texts[0])
+
+    def test_unproven_model_is_on_probation_and_the_rules_decide(self):
+        rec, texts = self.decide(0.20, proven=False)
+        self.assertEqual(rec['status'], 'OPEN')
+        self.assertEqual(rec['signal']['decided_by'], 'rules')
+        self.assertIn('P(win) 0.20 from 100 past breakouts · on probation until it beats luck', texts[0])
+
+    def test_evidence_proves_a_real_pattern_and_not_noise(self):
+        from india import index_fno_learn as L
+        real = L.evidence(synthetic_rows(60))
+        self.assertTrue(real['proven'], real)
+        noise = synthetic_rows(60, seed=3)
+        for i, r in enumerate(noise):
+            r['win'] = i % 2
+            r['r'] = 0.5 if r['win'] else -0.5
+        self.assertFalse(L.evidence(noise)['proven'])
+        self.assertFalse(L.evidence(synthetic_rows(10))['proven'])            # too few test trades
+        self.assertIn('of 30 test trades', L.probation_reason(L.evidence(synthetic_rows(10))))
 
     def test_advise_shows_the_model_but_the_rules_decide(self):
         rec, texts = self.decide(0.40, learning='advise')
@@ -562,7 +661,7 @@ class Learning(unittest.TestCase):
         from india import index_fno_learn as L
         intraday, daily = replay_data()
         with tempfile.TemporaryDirectory() as d:
-            base = P.load_config(None)
+            base = legacy_config()
             base['risk_per_trade'] = 50000
             base['index_fno'] = dict(base['index_fno'], state_dir=d)
             rows, model = L.seed(base, report=dict(ledger=[dict(r, p_win=0.5, decision='TAKE') for r in synthetic_rows()]))
@@ -586,6 +685,8 @@ class Learning(unittest.TestCase):
             self.assertIn('NIFTY BUY 09:35 · model 0.61 → TAKEN', text)
             self.assertIn('Memory: 81 breakouts', text)
             self.assertIn('Live model record: taken 1', text)
+            self.assertIn('📓 Journal: today ₹900 (+0.30R) on 1 trade · week +0.3R · equity +0.3R over 1 trades', text)
+            self.assertIn('➡️ next session risk ₹50,000 per trade', text)
             # Learning the same day again replaces, never duplicates.
             self.assertEqual(L.update(base, DAY, now, DEFAULT_CALENDAR, intraday=intraday, daily=daily)['memory'], 81)
             rep = L.memory_report(base, warmup=20, shuffles=0)
@@ -594,7 +695,7 @@ class Learning(unittest.TestCase):
 
     def test_serve_learns_once_after_the_square_off(self):
         with tempfile.TemporaryDirectory() as d:
-            cfg = P.load_config(None)
+            cfg = legacy_config()
             cfg['state_dir'] = str(Path(d) / 'picks')
             cfg['index_fno'] = dict(cfg['index_fno'], state_dir=str(Path(d) / 'fno'))
             S.write(Path(d) / S.FILENAME, 'index_fno', True)
@@ -626,7 +727,7 @@ class Offline(unittest.TestCase):
     """The laptop has no internet until 10:15."""
 
     def base(self, d):
-        cfg = P.load_config(None)
+        cfg = legacy_config()
         cfg['risk_per_trade'] = 50000
         cfg['recorder'] = dict(cfg['recorder'], state_dir=str(Path(d) / 'rec'))
         cfg['index_fno'] = dict(cfg['index_fno'], state_dir=str(Path(d) / 'fno'), indices=['NIFTY 50'])
@@ -753,7 +854,7 @@ class Desk(unittest.TestCase):
 
     def test_old_cached_levels_without_realised_vol_are_refetched(self):
         with tempfile.TemporaryDirectory() as d:
-            base = P.load_config(None)
+            base = legacy_config()
             base['index_fno'] = dict(base['index_fno'], state_dir=str(Path(d) / 'fno'))
             F.save_state(base['index_fno']['state_dir'], dict(date=DAY.isoformat(), indices={}, brief_sent='x',
                                                               context={'NIFTY 50': {'close': 1.0}}))
@@ -766,15 +867,19 @@ class Desk(unittest.TestCase):
 
     def test_brief_goes_out_once_before_the_open(self):
         with tempfile.TemporaryDirectory() as d:
-            base = P.load_config(None)
+            base = legacy_config()
             base['recorder'] = dict(base['recorder'], state_dir=str(Path(d) / 'rec'))
             base['index_fno'] = dict(base['index_fno'], state_dir=str(Path(d) / 'fno'))
             contexts = {'NIFTY 50': dict(context(), atr=250.0), 'NIFTY BANK': context(close=52000.0, high=52500.0, low=51500.0),
                         'INDIA VIX': dict(close=13.4)}
             kw = dict(calendar=DEFAULT_CALENDAR, candle_loader=lambda *a, **k: [],
                       context_loader=lambda *a: contexts,
-                      market_factory=lambda fno, cal, vix: O.make_market(fno, cal, vix, None))
+                      market_factory=lambda fno, cal, vix: O.make_market(fno, cal, vix, None),
+                      global_loader=lambda now: {'S&P 500': -1.3, 'Crude': 0.4})
             doc, texts = F.tick(base, at(9, 6), **kw)
+            self.assertIn('Global: S&P 500 -1.3% · Crude +0.4% → risk-off overnight', texts[0])
+            self.assertIn('📒 Desk: no closed trades yet · risk today ₹1,000 per trade (full size)', texts[0])
+            self.assertIn('One trade at a time, one loss and done', texts[0])
             self.assertEqual(len(texts), 1)
             self.assertIn('Index options desk', texts[0])
             self.assertIn('VIX 13.4: premiums cheap', texts[0])
@@ -793,7 +898,7 @@ class Gating(unittest.TestCase):
         conf = Path(d) / 'picks.json'
         conf.write_text(json.dumps(dict({'state_dir': str(Path(d) / 'picks'), 'risk_per_trade': 50000,
                                          'recorder': {'state_dir': str(Path(d) / 'rec')},
-                                         'index_fno': {'state_dir': str(Path(d) / 'fno'), 'indices': ['NIFTY 50']}},
+                                         'index_fno': dict(LEGACY, state_dir=str(Path(d) / 'fno'), indices=['NIFTY 50'])},
                                         **extra)))
         return conf
 
@@ -808,6 +913,7 @@ class Gating(unittest.TestCase):
             with mock.patch.object(F, 'load_candles', lambda *a, **k: bars), \
                     mock.patch.object(F, 'fetch_context', lambda *a: contexts), \
                     mock.patch.object(F, 'yahoo_candles', lambda *a: []), \
+                    mock.patch.object(F, 'fetch_global', lambda now: {}), \
                     mock.patch.object(P, 'send_telegram', lambda t, c, text: sent.append(text)), \
                     mock.patch('sys.stdout'), mock.patch('sys.stderr'), mock.patch.dict('os.environ', env):
                 self.assertEqual(F.main(args), 0)
@@ -843,7 +949,7 @@ class Gating(unittest.TestCase):
 class Scheduler(unittest.TestCase):
     def test_switch_starts_recorder_and_runs_fno_only_in_session(self):
         with tempfile.TemporaryDirectory() as d:
-            cfg = P.load_config(None)
+            cfg = legacy_config()
             cfg['state_dir'] = str(Path(d) / 'picks')
             calls, made = [], []
 
@@ -877,7 +983,7 @@ class Scheduler(unittest.TestCase):
 class OfflineScheduler(unittest.TestCase):
     def test_morning_alert_waits_for_the_connection_instead_of_spending_attempts(self):
         with tempfile.TemporaryDirectory() as d:
-            cfg = P.load_config(None)
+            cfg = legacy_config()
             cfg['state_dir'] = d
             clock, calls, logs = [at(8, 40)], [], []
 

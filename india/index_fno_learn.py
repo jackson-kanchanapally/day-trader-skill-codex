@@ -307,15 +307,40 @@ def save_dataset(folder, rows):
     _write(Path(folder) / 'dataset.jsonl', ''.join(json.dumps(r, sort_keys=True) + '\n' for r in rows))
 
 
+PROOF_RUNS = 100        # shuffled-label runs behind the probation check
+PROOF_MIN_TRADES = 30   # scored walk-forward trades before the model can come off probation
+PROOF_P = 0.05          # at most this share of shuffled runs may do as well as the model
+
+
+def evidence(rows, warmup=25, threshold=0.55, l2=1.0, runs=None):
+    """Has the model earned its say? Walk-forward over memory plus the shuffled-label control.
+
+    proven: enough scored trades, its TAKEs beat every breakout, and at most PROOF_P of shuffled runs match it."""
+    by = {}
+    for r in rows:
+        by.setdefault(r['date'], []).append(r)
+    by_day = [(dt.date.fromisoformat(d), sorted(ts, key=lambda t: t['time'])) for d, ts in sorted(by.items())]
+    res = evaluate(walk(by_day, warmup, threshold, l2), 0)
+    every, model = res['every'], res['model']
+    out = dict(scored=every.get('trades', 0), model_trades=model.get('trades', 0), model_avg_r=model.get('avg_r'),
+               every_avg_r=every.get('avg_r'), p_value=None, proven=False)
+    if out['scored'] >= PROOF_MIN_TRADES and model.get('trades'):
+        ctl = shuffled_control(by_day, warmup, threshold, l2, model['avg_r'], runs or PROOF_RUNS)
+        out['p_value'] = ctl['p_value']
+        out['proven'] = model['avg_r'] > every['avg_r'] and ctl['p_value'] <= PROOF_P
+    return out
+
+
 def train(folder, rows, l2=1.0, now=None):
-    """Fit on every row in memory and save model.json; None when one class is missing."""
+    """Fit on every row in memory, test whether it has earned its say, save model.json; None when one class is missing."""
     ys = [r['win'] for r in rows]
     if not rows or not 0 < sum(ys) < len(ys):
         return None
     m = Logit(l2).fit([r['features'] for r in rows], ys)
+    proof = evidence(rows, l2=l2)
     doc = dict(features=list(FEATURES), w=m.w, mu=m.mu, sd=m.sd, l2=l2, trained_on=len(rows), wins=sum(ys),
-               first=rows[0]['date'], through=rows[-1]['date'], weights=m.weights(),
-               updated_at=(now or dt.datetime.now(IST)).isoformat(timespec='seconds'))
+               first=rows[0]['date'], through=rows[-1]['date'], weights=m.weights(), proven=proof['proven'],
+               evidence=proof, updated_at=(now or dt.datetime.now(IST)).isoformat(timespec='seconds'))
     _write(Path(folder) / 'model.json', json.dumps(doc, indent=2))
     return doc
 
@@ -403,8 +428,21 @@ def update(cfg, day, now, calendar=None, intraday=None, daily=None, l2=1.0):
     save_dataset(folder, rows_after)
     model = train(folder, rows_after, l2, now)
     _write(folder / ('learned-%s' % day.isoformat()), now.isoformat())
+    taken = [v for v in live.values() if v.get('status') == 'CLOSED']
+    desk = F.discipline(fno, day + dt.timedelta(days=1))
+    budget = (fno.get('risk_per_trade') or cfg.get('risk_per_trade') or 0) * desk['mult']
     return dict(day=day.isoformat(), source=source, trades=trades, memory=len(rows_after), added=len(rows_after) - len(before),
-                model=model, forward=forward_record(rows_after))
+                model=model, forward=forward_record(rows_after),
+                journal=dict(pnl=sum(v.get('pnl') or 0 for v in taken), r=round(sum(v.get('r') or 0 for v in taken), 2),
+                             trades=len(taken), desk=desk, next_budget=budget))
+
+
+def probation_reason(ev):
+    if ev['scored'] < PROOF_MIN_TRADES:
+        return '%d of %d test trades' % (ev['scored'], PROOF_MIN_TRADES)
+    if ev.get('p_value') is None:
+        return 'it took no trades in the test'
+    return '%.0f%% of shuffled runs did as well, needs ≤%.0f%%' % (ev['p_value'] * 100, PROOF_P * 100)
 
 
 def update_text(res, fno):
@@ -426,13 +464,24 @@ def update_text(res, fno):
     rows_wins = (m or {}).get('wins')
     lines.append('Memory: %d breakouts%s · model %s' % (
         res['memory'], ' (%.0f%% wins)' % (rows_wins / m['trained_on'] * 100) if m else '',
-        'retrained' if m else 'not trained yet (needs wins and losses)'))
+        'not trained yet (needs wins and losses)' if not m else 'retrained, PROVEN: it decides' if m.get('proven') else
+        'retrained, on probation (%s): the grade rules decide' % probation_reason(m['evidence'])))
     f = res['forward']
     if f['taken']['trades'] or f['skipped']['trades']:
         fmt = lambda s: '%d, %+.2fR avg' % (s['trades'], s['avg_r']) if s['trades'] else '0'
         lines.append('Live model record: taken %s · skipped %s' % (fmt(f['taken']), fmt(f['skipped'])))
     if m:
         lines.append('Leaning on: ' + ', '.join('%s %+.2f' % tuple(kv) for kv in m['weights'][:3]))
+    j = res.get('journal')
+    if j:
+        d = j['desk']
+        today = 'today %s (%+.2fR) on %d trade%s' % (P.inr(j['pnl'], 0), j['r'], j['trades'], '' if j['trades'] == 1 else 's') \
+            if j['trades'] else 'no trade today'
+        tomorrow = d['block'] if d['block'] else 'next session risk %s per trade%s' % (
+            P.inr(j['next_budget'], 0), ' (' + '; '.join(d['notes']) + ')' if d['notes'] else '')
+        lines.append('📓 Journal: %s · week %+.1fR · equity %+.1fR over %d trades (%.1fR off the peak)' % (
+            today, d['week_r'], d['equity_r'], d['trades'], d['drawdown_r']))
+        lines.append('➡️ %s' % tomorrow)
     lines.append('<i>Paper research, not advice.</i>')
     return '\n'.join(lines)
 

@@ -675,6 +675,36 @@ breakouts in `var/state/index_fno/learning/dataset.jsonl` and trains
 The first model did not beat chance (see above), so treat its decisions as an
 experiment that this record will confirm or reject.
 
+**Trading like a professional.** The desk's rules come from replaying the last
+60 sessions through the engine (option P&L after charges), not from taste:
+
+- **Setup:** the 30-minute opening range (09:15-09:45, `range_minutes` 30),
+  with the stop where the breakout is proven wrong: back through the breakout
+  candle, at least a quarter inside the range (`stop_mode` "candle"). Every
+  breakout went from +0.04R to about +0.15R per trade, T1 hit from ~5% to
+  ~30%. Still within about 1.5 standard errors of zero: not proof.
+- **Runner:** half is booked at 1R and the stop goes to cost; the rest trails
+  each completed five-minute low (high for puts) instead of a fixed T2
+  (`runner` "trail").
+- **Never fade a failed breakout:** tested at −0.22R per trade, so the desk
+  does not trade it.
+- **Account rules:** one losing trade ends the day's entries
+  (`one_loss_a_day`); −3R in a week stops new trades until Monday
+  (`weekly_loss_limit_r`); 2 losses in a row (`streak_half_after`) or 5R below
+  the equity peak (`drawdown_half_r`) halve the size until a winner or
+  recovery. The record is the desk's own closed paper trades.
+- **Morning read:** the brief adds the overnight S&P 500, Nasdaq, US VIX,
+  Nikkei, Hang Seng, crude and USD/INR moves (Yahoo, `global_cues`) and a
+  risk-on/off read, which is shown but not traded on (untested), plus the
+  desk's record and today's risk per trade.
+- **Evening journal:** the 15:40 learning note adds today's P&L, the week,
+  the equity curve and tomorrow's size or stop.
+- **Learned model on probation:** with `learning` "decide", the model
+  decides only after it has proven itself: at least 30 walk-forward test
+  trades, its TAKEs ahead of every breakout, and at most 5% of
+  shuffled-label runs matching it (re-checked after each session). Until
+  then alerts show its P(win) and the grade rules decide.
+
 **Daily risk.** At most `max_open_trades` (1) options trade is open at a time
 across NIFTY and BANKNIFTY. Realised losses plus the risk of open trades stay
 within `max_daily_loss`; when that is null, the cap is 2 × the options

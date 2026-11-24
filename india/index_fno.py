@@ -7,7 +7,7 @@ a live chain, PCR, max pain and the call/put OI walls.
 
 Signals, per index, once per session:
 
-  1. Opening range: high and low of the first `range_minutes` (09:15-09:30)
+  1. Opening range: high and low of the first `range_minutes` (09:15-09:45)
      from the recorder's sampled five-minute index candles, all usable.
   2. Breakout: the first five-minute CLOSE beyond the range by a buffer
      (`breakout_buffer_pct` of price or 10% of the range, whichever is more)
@@ -32,10 +32,18 @@ Signals, per index, once per session:
      `iv_shock_pct` wherever the index rallies (a call's T1/T2, a put's
      stop). High-vega structures therefore earn less or risk more, carry
      fewer lots and must still clear `min_option_rr`.
-  5. Management on the spot index: stop at the far side of the range; T1 at
-     1R books half and moves the stop to cost; the rest exits at T2 (pulled
-     in to a level between 1.2R and 2R), the stop, the theta time stop
+  5. Management on the spot index: the stop is where the breakout is proven
+     wrong (`stop_mode` "candle": back through the breakout candle, at least a
+     quarter inside the range; "range": the far side). T1 at 1R books half
+     and moves the stop to cost; the rest trails each completed 5-minute
+     low/high (`runner` "trail") or exits at T2, else at the theta time stop
      (`time_stop_minutes` without T1) or `square_off`.
+  6. A professional's account rules: one losing trade ends the day's entries
+     (`one_loss_a_day`); a weekly loss of `weekly_loss_limit_r` stops new
+     trades until Monday; `streak_half_after` losses in a row or a drawdown of
+     `drawdown_half_r` from the equity peak halve the size. The brief shows
+     the overnight global cues and the desk's record; the evening learning
+     note carries the journal.
 
 Everything is free and needs no broker account: spot from NSE's official MCP,
 premiums estimated with Black-Scholes from NSE's India VIX (scaled per index by
@@ -76,7 +84,7 @@ DEFAULTS = dict(
     indices=['NIFTY 50', 'NIFTY BANK'],
     vix_index='INDIA VIX',
     brief_time='09:05',
-    range_minutes=15,
+    range_minutes=30,
     entry_deadline='13:30',
     square_off='15:15',
     min_range_pct=0.15,
@@ -88,6 +96,8 @@ DEFAULTS = dict(
     target_r=[1.0, 2.0],
     fresh_minutes=10,
     time_stop_minutes=60,
+    stop_mode='candle',      # range: far side of the opening range | candle: the breakout candle's far end, >= 1/4 inside
+    runner='trail',          # after T1 the rest: target exits at T2 | trail follows each completed 5-min low/high
     min_dte=2,
     risk_per_trade=None,     # INR at the stop incl. charges; null uses the picks risk_per_trade
     max_daily_loss=None,     # INR: realised losses + open risk across all indices; null = 2 x risk_per_trade
@@ -106,6 +116,11 @@ DEFAULTS = dict(
     learning='decide',       # decide | advise | off: the model learned from past breakouts (india/index_fno_learn.py)
     learn_threshold=0.55,    # with "decide": take a breakout when the model's P(win) is at least this
     learn_min_trades=25,     # below this many learned breakouts the grade rules decide
+    one_loss_a_day=True,     # a losing trade ends the day's new entries (no revenge trades)
+    weekly_loss_limit_r=3.0, # realised loss this week, in R, that stops new trades until Monday; null = off
+    streak_half_after=2,     # this many losing trades in a row halve the size until a winner; null = off
+    drawdown_half_r=5.0,     # equity this many R below its peak halves the size; null = off
+    global_cues=True,        # overnight US/Asia/crude/rupee moves in the brief (Yahoo, free)
 )
 FINAL = frozenset(('NO_RANGE', 'SKIPPED_RANGE', 'SKIPPED_VIX', 'SKIPPED_EVENT', 'SKIPPED_WEAK', 'SKIPPED_OPTION',
                    'SKIPPED_RISK', 'SKIPPED_MODEL',
@@ -191,6 +206,18 @@ def settings(value=None):
     v = cfg['learn_min_trades']
     if not isinstance(v, int) or isinstance(v, bool) or not 10 <= v <= 1000:
         raise ValueError('index_fno.learn_min_trades must be a whole number from 10 to 1000')
+    if not isinstance(cfg['one_loss_a_day'], bool) or not isinstance(cfg['global_cues'], bool):
+        raise ValueError('index_fno.one_loss_a_day and global_cues must be true or false')
+    for key in ('weekly_loss_limit_r', 'drawdown_half_r'):
+        if cfg[key] is not None:
+            _positive(cfg, key, 50)
+    v = cfg['streak_half_after']
+    if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= 10):
+        raise ValueError('index_fno.streak_half_after must be a whole number from 1 to 10, or null')
+    if cfg['stop_mode'] not in ('range', 'candle'):
+        raise ValueError('index_fno.stop_mode must be "range" or "candle"')
+    if cfg['runner'] not in ('target', 'trail'):
+        raise ValueError('index_fno.runner must be "target" or "trail"')
     if cfg['chain_source'] not in ('model', 'upstox'):
         raise ValueError('index_fno.chain_source must be "model" (free) or "upstox"')
     if not isinstance(cfg['send_skips'], bool):
@@ -680,10 +707,15 @@ def signal_text(name, sig, opt, cfg, rng, opening, range_end, warning):
         '🛑 Stop: %s %s %s (premium %s)' % (c['short'], 'below' if side == 'BUY' else 'above', _num(sig['stop']),
                                             px(opt['stop'])),
         '🎯 T1: %s %s (%s) → %s' % (c['short'], _num(sig['target1']), px(opt['t1']), book),
-        '🏁 T2: %s %s (%s)%s' % (c['short'], _num(sig['target2']), px(opt['t2']),
-                                ' just before %s' % sig['t2_level'] if sig.get('t2_level') else ''),
+        ('🏁 T2: %s %s (%s)%s' % (c['short'], _num(sig['target2']), px(opt['t2']),
+                                 ' just before %s' % sig['t2_level'] if sig.get('t2_level') else '')
+         if cfg['runner'] == 'target' else
+         '🏃 Runner: after T1 the rest trails each 5-min %s; no fixed exit (T2 %s ≈%s is the reference)' % (
+             'low' if side == 'BUY' else 'high', _num(sig['target2']), _num(opt['t2']))),
         '⏱ Time stop %s if T1 has not hit (theta) · square off by %s' % (time_stop, cfg['square_off']),
-        '💰 Risk %s of %s budget · reward/risk %.1f · %s%s' % (P.inr(opt['risk'], 0), P.inr(opt['budget'], 0), opt['rr'], opt['style'],
+        '💰 Risk %s of %s budget%s · reward/risk %.1f · %s%s' % (
+            P.inr(opt['risk'], 0), P.inr(opt['budget'], 0),
+            ' (%.1f%% of capital)' % (opt['risk'] / cfg['_capital'] * 100) if cfg.get('_capital') else '', opt['rr'], opt['style'],
                                        ' · ' + ' · '.join(opt['warnings']) if opt['warnings'] else ''),
         '📋 Why: %s-%s range %s-%s broken with a close at %s · %s · %s' % (
             opening.strftime('%H:%M'), range_end.strftime('%H:%M'), _num(rng['low']), _num(rng['high']),
@@ -693,6 +725,8 @@ def signal_text(name, sig, opt, cfg, rng, opening, range_end, warning):
         if sig.get('decided_by') == 'model':
             role = 'decides (take at %.2f+)%s' % (cfg['learn_threshold'], '' if sig.get('rules_take') else
                                                   '; the grade rule alone would have skipped')
+        elif cfg['learning'] == 'decide':
+            role = 'on probation until it beats luck; the grade rules decide'
         else:
             role = 'advisory only'
         lines.append('🧠 Learned model: P(win) %.2f from %d past breakouts · %s' % (sig['p_win'], sig['model_trades'], role))
@@ -783,6 +817,11 @@ def process(name, rec, candles, vix, now, opening, cfg, ctx=None, market=None, c
                 break
             entry = x['close']
             stop = rng['low'] if side == 'BUY' else rng['high']
+            if cfg['stop_mode'] == 'candle':
+                # Invalidation: back through the breakout candle (at least a quarter inside the range).
+                quarter = 0.25 * (rng['high'] - rng['low'])
+                stop = min(_price(x, 'low'), rng['high'] - quarter) if side == 'BUY' else \
+                    max(_price(x, 'high'), rng['low'] + quarter)
             risk = abs(entry - stop)
             summary = None
             if market is not None:
@@ -798,7 +837,7 @@ def process(name, rec, candles, vix, now, opening, cfg, ctx=None, market=None, c
             model = cfg.get('_model')
             p_win = round(model_p(model, features), 3) if model else None
             rules_take = not blockers and score >= cfg['min_score']
-            by_model = p_win is not None and cfg['learning'] == 'decide' 
+            by_model = p_win is not None and cfg['learning'] == 'decide' and bool(model.get('proven'))
             base = dict(side=side, time=end.isoformat(), entry=entry, stop=stop, initial_stop=stop,
                         risk=round(risk, 2), target1=t1, target2=t2, t2_level=capped, vix=level, score=score,
                         grade=grade(score), why=why, regime=regime_text, summary=summary, features=features,
@@ -869,8 +908,9 @@ def manage(name, rec, candles, now, day, cfg, market):
         rec.update(status='CLOSED', pnl=net, gross=round(gross, 0), charges=cost,
                    r=round(net / opt['risk'], 2) if opt['risk'] else None)
         texts.append('%s <b>%s: %s</b> · %s IST\n%s\nExit ₹%s (%s) · P&amp;L %s after ~%s charges (%+.2fR)' % (
-            {'STOP': '🛑', 'BREAKEVEN': '⚖️', 'TARGET2': '🏁', 'SQUARE_OFF': '⏰', 'TIME_STOP': '⏱'}[kind], head,
+            {'STOP': '🛑', 'BREAKEVEN': '⚖️', 'TARGET2': '🏁', 'SQUARE_OFF': '⏰', 'TIME_STOP': '⏱', 'TRAIL': '📈'}[kind], head,
             {'STOP': 'stop-loss hit', 'BREAKEVEN': 'stopped at cost', 'TARGET2': 'T2 reached', 'SQUARE_OFF': 'square-off',
+             'TRAIL': 'trailing stop hit, runner closed',
              'TIME_STOP': 'time stop, T1 not reached'}[kind], at.strftime('%H:%M'), text, _num(premium), src,
             P.inr(net, 0), P.inr(cost, 0), rec['r'] or 0))
 
@@ -883,9 +923,10 @@ def manage(name, rec, candles, now, day, cfg, market):
         fav = _price(x, 'high') if sign > 0 else _price(x, 'low')
         adv = _price(x, 'low') if sign > 0 else _price(x, 'high')
         if sign * (adv - sig['stop']) <= 0:
-            kind = 'BREAKEVEN' if sig['t1_hit'] else 'STOP'
-            close(kind, sig['stop'], end, 'Spot %s through the stop %s. Exit %s.' % (
-                _num(adv), _num(sig['stop']), 'the rest' if sig['t1_hit'] else 'the position'))
+            kind = ('TRAIL' if sig.get('trailed') else 'BREAKEVEN') if sig['t1_hit'] else 'STOP'
+            close(kind, sig['stop'], end, 'Spot %s through the %sstop %s. Exit %s.' % (
+                _num(adv), 'trailing ' if kind == 'TRAIL' else '', _num(sig['stop']),
+                'the rest' if sig['t1_hit'] else 'the position'))
             break
         if not sig['t1_hit'] and sign * (fav - sig['target1']) >= 0:
             sig['t1_hit'] = True
@@ -893,11 +934,13 @@ def manage(name, rec, candles, now, day, cfg, market):
             premium, src = book('TARGET1', half, sig['target1'], end) if half else mark(opt, sig['target1'], end, market, name, cfg['rate'])
             sig['stop'] = sig['entry']
             texts.append('🎯 <b>%s: T1 reached</b> · %s IST\nSpot %s through T1 %s · premium ₹%s (%s, entry ₹%s).\n%s '
-                         'Stop moves to cost (spot %s); the rest aims for T2 %s.' % (
+                         'Stop moves to cost (spot %s); %s.' % (
                              head, end.strftime('%H:%M'), _num(fav), _num(sig['target1']), _num(premium), src,
                              _num(opt['net']), ('Book %d of %d lots.' % (half, lots)) if half else 'With 1 lot, hold.',
-                             _num(sig['entry']), _num(sig['target2'])))
-        if sig['t1_hit'] and sign * (fav - sig['target2']) >= 0:
+                             _num(sig['entry']), 'the rest trails behind each 5-minute %s from here' % (
+                                 'low' if sign > 0 else 'high') if cfg['runner'] == 'trail' else
+                             'the rest aims for T2 %s' % _num(sig['target2'])))
+        if sig['t1_hit'] and cfg['runner'] == 'target' and sign * (fav - sig['target2']) >= 0:
             close('TARGET2', sig['target2'], end, 'Spot %s through T2 %s. Exit the rest.' % (
                 _num(fav), _num(sig['target2'])))
             break
@@ -909,6 +952,12 @@ def manage(name, rec, candles, now, day, cfg, market):
         if end >= square:
             close('SQUARE_OFF', x['close'], end, 'Exit what is left at spot %s.' % _num(x['close']))
             break
+        if sig['t1_hit'] and cfg['runner'] == 'trail':
+            # The runner's stop follows each completed candle's low (long) or high (short); never loosens.
+            level = _price(x, 'low') if sign > 0 else _price(x, 'high')
+            if sign * (level - sig['stop']) > 0:
+                sig['stop'] = level
+                sig['trailed'] = True
     if rec['status'] == 'OPEN' and now >= square + dt.timedelta(minutes=15):
         last = candles[-1]['close'] if candles else sig['entry']
         close('SQUARE_OFF', last, square, 'No usable candle at %s; marked at the last close %s.' % (
@@ -949,7 +998,21 @@ def atm_text(atm, ctx, c, model):
     return lines
 
 
-def brief_text(cfg, now, contexts, vix, markets_info, warning, late=False, doc=None):
+def desk_line(desk, cfg):
+    """The account's state the way a trader reads it before the open."""
+    if not desk:
+        return None
+    if desk['block']:
+        return '⛔ %s' % desk['block']
+    size = P.inr(cfg['_budget'], 0) if cfg.get('_budget') else '—'
+    record = 'equity %+.1fR over %d trades · week %+.1fR · %d loss%s in a row' % (
+        desk['equity_r'], desk['trades'], desk['week_r'], desk['streak'], '' if desk['streak'] == 1 else 'es') \
+        if desk['trades'] else 'no closed trades yet'
+    return '📒 Desk: %s · risk today %s per trade%s' % (
+        record, size, ' (' + '; '.join(desk['notes']) + ')' if desk['notes'] else ' (full size)')
+
+
+def brief_text(cfg, now, contexts, vix, markets_info, warning, late=False, doc=None, desk=None, cues=None):
     regime, regime_text = vix_regime(vix, cfg)
     lines = ['🧭 <b>Index options desk · %s%s</b>' % (now.strftime('%a %d %b'), ' · LATE %s' % now.strftime('%H:%M') if late else ''),
              '%s · strategy: %s' % (html.escape(regime_text), {
@@ -957,6 +1020,15 @@ def brief_text(cfg, now, contexts, vix, markets_info, warning, late=False, doc=N
                  'elevated': 'ITM buys or debit spreads, whichever pays better',
                  'extreme': 'stand aside on buying; no signals',
                  'unknown': 'wait for VIX'}[regime])]
+    line, mood = global_read(cues)
+    if line:
+        lines.append('%s → %s overnight%s' % (line, mood, {
+            'risk-off': ': expect weakness at the open; let the range settle, size stays as planned',
+            'risk-on': ': expect strength at the open; do not chase a gap',
+            'neutral': ''}.get(mood, '')))
+    dl = desk_line(desk, cfg)
+    if dl:
+        lines.append(dl)
     for name in cfg['indices']:
         ctx = contexts.get(name)
         c = cfg['contracts'][name]
@@ -992,8 +1064,11 @@ def brief_text(cfg, now, contexts, vix, markets_info, warning, late=False, doc=N
             if rng:
                 lines.append('%s opening range %s-%s (%.2f%%)' % (cfg['contracts'][name]['short'], _num(rng['low']),
                                                                  _num(rng['high']), rng['width_pct']))
-    lines.append('\nPlan: trade only a five-minute close beyond the %s-%s range, with the trend and room to run.' % (
-        '09:15', (dt.datetime.combine(now.date(), dt.time(9, 15)) + dt.timedelta(minutes=cfg['range_minutes'])).strftime('%H:%M')))
+    lines.append('\nPlan: trade only a five-minute close beyond the %s-%s range. Stop where the breakout is proven '
+                 'wrong%s. One trade at a time%s; no trade is also a position.' % (
+                     '09:15', (dt.datetime.combine(now.date(), dt.time(9, 15)) + dt.timedelta(minutes=cfg['range_minutes'])).strftime('%H:%M'),
+                     '; book half at 1R and trail the rest' if cfg['runner'] == 'trail' else '; book half at 1R, the rest at T2',
+                     ', one loss and done' if cfg['one_loss_a_day'] else ''))
     if warning:
         lines.append('⚠️ %s' % html.escape(warning))
     lines.append('<i>Paper research, not advice.</i>')
@@ -1018,6 +1093,83 @@ def save_state(state_dir, doc):
     os.replace(temporary, root / ('signals-%s.json' % doc['date']))
 
 
+def trade_history(state_dir, before):
+    """Closed desk trades from the daily state files before `before`, oldest first: [(date, r, pnl)]."""
+    out = []
+    for path in sorted(Path(state_dir).glob('signals-*.json')):
+        day = path.stem[len('signals-'):]
+        try:
+            if dt.date.fromisoformat(day) >= before:
+                continue
+            doc = json.loads(path.read_text())
+        except (ValueError, OSError):
+            continue
+        for rec in sorted((doc.get('indices') or {}).values(), key=lambda r: (r.get('signal') or {}).get('time', '')):
+            if rec.get('status') == 'CLOSED' and rec.get('r') is not None:
+                out.append((dt.date.fromisoformat(day), rec['r'], rec.get('pnl') or 0))
+    return out
+
+
+def discipline(fno, today, history=None):
+    """A professional's account rules from the trade record: weekly stop, losing streak and drawdown sizing.
+
+    Returns dict(mult, block, notes, week_r, streak, drawdown_r, equity_r, trades)."""
+    hist = trade_history(fno['state_dir'], today) if history is None else history
+    monday = today - dt.timedelta(days=today.weekday())
+    week_r = round(sum(r for d, r, _ in hist if d >= monday), 2)
+    streak = 0
+    for _, r, _ in reversed(hist):
+        if r >= 0:
+            break
+        streak += 1
+    equity = peak = 0.0
+    for _, r, _ in hist:
+        equity += r
+        peak = max(peak, equity)
+    drawdown = round(peak - equity, 2)
+    mult, block, notes = 1.0, None, []
+    if fno['weekly_loss_limit_r'] is not None and week_r <= -fno['weekly_loss_limit_r']:
+        block = 'weekly stop: %+.1fR this week (limit −%gR). Flat until Monday.' % (week_r, fno['weekly_loss_limit_r'])
+    if fno['streak_half_after'] and streak >= fno['streak_half_after']:
+        mult = 0.5
+        notes.append('%d losses in a row: half size until a winner' % streak)
+    if fno['drawdown_half_r'] and drawdown >= fno['drawdown_half_r']:
+        mult = 0.5
+        notes.append('%.1fR below the equity peak: half size' % drawdown)
+    return dict(mult=mult, block=block, notes=notes, week_r=week_r, streak=streak, drawdown_r=drawdown,
+                equity_r=round(equity, 2), trades=len(hist))
+
+
+GLOBAL = (('^GSPC', 'S&P 500'), ('^IXIC', 'Nasdaq'), ('^VIX', 'US VIX'), ('^N225', 'Nikkei'), ('^HSI', 'Hang Seng'),
+          ('CL=F', 'Crude'), ('INR=X', 'USD/INR'))
+
+
+def fetch_global(now):
+    """Last change of each overnight cue from Yahoo daily candles: {label: pct}. Missing ones are left out."""
+    from urllib.parse import quote
+    out = {}
+    for symbol, label in GLOBAL:
+        try:
+            doc = json.loads(P.http_get('https://query2.finance.yahoo.com/v8/finance/chart/%s?range=5d&interval=1d' % quote(symbol)))
+            closes = [c for c in doc['chart']['result'][0]['indicators']['quote'][0]['close'] if c]
+            if len(closes) >= 2:
+                out[label] = round((closes[-1] / closes[-2] - 1) * 100, 2)
+        except (ValueError, OSError, KeyError, TypeError, IndexError):
+            continue
+    return out
+
+
+def global_read(cues):
+    """(line, mood) from the overnight cues; the mood is shown, not traded on (untested)."""
+    if not cues:
+        return None, 'unknown'
+    spx, vix = cues.get('S&P 500'), cues.get('US VIX')
+    mood = 'risk-off' if (spx is not None and spx <= -1) or (vix is not None and vix >= 10) else \
+        'risk-on' if spx is not None and spx >= 1 else 'neutral'
+    line = 'Global: ' + ' · '.join('%s %+.1f%%' % (k, v) for k, v in cues.items())
+    return line, mood
+
+
 def risk_guard(doc, fno, name):
     """Budget and block for a new trade on `name`, given today's other trades.
 
@@ -1032,6 +1184,11 @@ def risk_guard(doc, fno, name):
     lost = max(0.0, -sum(r.get('pnl') or 0 for r in others.values() if r.get('status') == 'CLOSED'))
     room = cap - at_risk - lost
     short = lambda n: fno['contracts'][n]['short']
+    if fno.get('_desk_block'):
+        return dict(_block=fno['_desk_block'])
+    losers = [n for n, r in others.items() if r.get('status') == 'CLOSED' and (r.get('pnl') or 0) < 0]
+    if fno['one_loss_a_day'] and losers:
+        return dict(_block='one loss a day: %s already lost today. No revenge trade.' % ', '.join(short(n) for n in losers))
     if len(open_) >= fno['max_open_trades']:
         return dict(_block='%s trade already open (max_open_trades %d)' % (
             ', '.join(short(n) for n in open_), fno['max_open_trades']))
@@ -1126,13 +1283,17 @@ def merge_backfilled(doc, by, names, loader_cache):
 
 
 def tick(cfg, now, calendar=None, candle_loader=None, context_loader=None, market_factory=None,
-         backfill_loader=None, tagged=False):
+         backfill_loader=None, tagged=False, global_loader=None):
     """One pass: the brief, then every configured index. Returns (state, texts); saves nothing.
 
     With `tagged`, texts are (index or None, kind, text) for the outbox.
     `backfill_loader(name, day, now)` fills recorder gaps (default: none)."""
     fno = dict(cfg['index_fno'], _budget=cfg['index_fno']['risk_per_trade'] or cfg['risk_per_trade'])
     fno['_model'] = load_model(fno)
+    desk = discipline(fno, now.date())
+    fno['_budget'] = round(fno['_budget'] * desk['mult'], 0)
+    fno['_desk_block'] = desk['block']
+    fno['_capital'] = cfg.get('capital')
     calendar = calendar or DEFAULT_CALENDAR
     hours = calendar.hours(now.date(), 'NSE')
     if not hours:
@@ -1211,7 +1372,13 @@ def tick(cfg, now, calendar=None, candle_loader=None, context_loader=None, marke
                 pass
         late = now >= range_end + SETTLE
         # Built after this tick's candles so a late brief can show the opening range; sent first.
-        out.insert(0, (None, 'brief', brief_text(fno, now, contexts, vix, info, warning, late=late, doc=doc)))
+        if global_loader is not None and fno['global_cues'] and 'global' not in doc:
+            try:
+                doc['global'] = global_loader(now)
+            except (ValueError, OSError, KeyError, TypeError):
+                doc['global'] = {}
+        out.insert(0, (None, 'brief', brief_text(fno, now, contexts, vix, info, warning, late=late, doc=doc,
+                                                 desk=desk, cues=doc.get('global'))))
         doc['brief_sent'] = now.isoformat()
     doc['checked_at'] = now.isoformat()
     return doc, (out if tagged else [text for _, _, text in out])
@@ -1310,7 +1477,7 @@ def main(argv=None):
         upstox = (env.get('UPSTOX_ANALYTICS_TOKEN') or env.get('UPSTOX_ACCESS_TOKEN') or '').strip() or None
         doc, tagged = tick(cfg, now, calendar,
                            market_factory=lambda fno, cal, vix: O.make_market(fno, cal, vix, upstox),
-                           backfill_loader=yahoo_candles, tagged=True)
+                           backfill_loader=yahoo_candles, tagged=True, global_loader=fetch_global)
         if doc is None:
             print(json.dumps({'status': 'SKIPPED', 'reason': 'not an NSE trading day'}))
             return 0
