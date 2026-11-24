@@ -504,6 +504,32 @@ such a minute. A full-session run has not been checked.
 - `india/index_fno.py` reads the index candles when the index F&O switch is
   on (see [Index options signals](#index-options-signals)).
 
+## Capital and risk
+
+Set both on the dashboard (**Alert trades → Capital and risk**) or from the
+alert chat:
+
+- `/capital 50000` (also `50,000`, `1.5L`, `25k`): the minimum is ₹5,000.
+- `/risk 1.5`: the loss at the stop per trade, as a % of capital, from 0.1%
+  to 5% (default 1%). `/risk ₹750` converts rupees to a %. Above 2% the reply
+  and the dashboard warn you: 10 losers in a row, normal for any strategy,
+  would cost about 18% of the capital at 2% and 26% at 3%.
+- `/capital` or `/risk` alone shows both.
+
+They are saved in `var/state/account.json`. Either can be set alone: a risk %
+applies to the config's capital, and a capital uses 1% until a risk % is set.
+Every stream reads them on its next run, with no restart: stock picks, the
+index options desk and gold. For example, ₹50,000 at 1.5% means ₹750 at the
+stop per trade, including charges. With nothing saved, `capital` and
+`risk_per_trade` in `config/picks.json` apply as before.
+
+Index options also check the premium itself: the lots bought (or the net
+debit of a spread) must fit the capital. At small capital this rules out most
+outright buys. For example, one NIFTY ATM lot costs about ₹15,000–17,000 in
+premium, so at ₹5,000-10,000 only debit spreads can fit (₹50-100 of risk per
+trade rarely covers even one), and the desk skips with the reason when
+nothing does.
+
 ## Alert switches
 
 The dashboard's **Alert trades** page starts with **Telegram alert streams**,

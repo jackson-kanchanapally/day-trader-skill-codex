@@ -564,6 +564,13 @@ def _price_structure(kind_name, legs, name, side, entry, stop, t1, t2, now, mark
     reward = (t2_p - net) * lot - O.charges(net * lot, t2_p * lot, orders)
     rr = reward / per_lot if per_lot > 0 else 0
     lots = int(budget // per_lot) if per_lot > 0 else 0
+    capital = cfg.get('_capital')
+    if capital and lots >= 1:
+        affordable = int(capital // (net * lot))
+        if affordable < 1:
+            return None, '%s: 1 lot costs %s in premium, more than the %s capital' % (
+                kind_name, P.inr(net * lot, 0), P.inr(capital, 0))
+        lots = min(lots, affordable)
     if lots < 1:
         return None, '%s: 1 lot risks %s at the stop; budget %s (%s)' % (
             kind_name, P.inr(per_lot, 0), P.inr(budget, 0), cfg.get('_budget_why') or 'raise index_fno.risk_per_trade')
@@ -1008,8 +1015,9 @@ def desk_line(desk, cfg):
     record = 'equity %+.1fR over %d trades · week %+.1fR · %d loss%s in a row' % (
         desk['equity_r'], desk['trades'], desk['week_r'], desk['streak'], '' if desk['streak'] == 1 else 'es') \
         if desk['trades'] else 'no closed trades yet'
-    return '📒 Desk: %s · risk today %s per trade%s' % (
-        record, size, ' (' + '; '.join(desk['notes']) + ')' if desk['notes'] else ' (full size)')
+    capital = ' · capital %s' % P.inr(cfg['_capital'], 0) if cfg.get('_capital') else ''
+    return '📒 Desk: %s%s · risk today %s per trade%s' % (
+        record, capital, size, ' (' + '; '.join(desk['notes']) + ')' if desk['notes'] else ' (full size)')
 
 
 def brief_text(cfg, now, contexts, vix, markets_info, warning, late=False, doc=None, desk=None, cues=None):

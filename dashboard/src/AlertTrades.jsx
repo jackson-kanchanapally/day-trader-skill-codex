@@ -284,6 +284,146 @@ function Session({ session }) {
   );
 }
 
+const MIN_CAPITAL_FALLBACK = 5000;
+const PRO_RISK_PCT = 2;
+
+function AccountCapital() {
+  const [state, setState] = useState(null),
+    [capital, setCapital] = useState(""),
+    [risk, setRisk] = useState(""),
+    [error, setError] = useState(""),
+    [saved, setSaved] = useState(""),
+    [saving, setSaving] = useState(false);
+  function load(d) {
+    setState(d);
+    setCapital(d.capital ? String(d.capital) : "");
+    setRisk(d.risk_pct != null ? String(d.risk_pct) : "");
+  }
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/account", { cache: "no-store", signal: controller.signal })
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || "Unable to read the capital.");
+        load(d);
+      })
+      .catch((e) => e.name !== "AbortError" && setError(e.message));
+    return () => controller.abort();
+  }, []);
+  const min = state?.min_capital || MIN_CAPITAL_FALLBACK,
+    minRisk = state?.min_risk_pct ?? 0.1,
+    maxRisk = state?.max_risk_pct ?? 5;
+  const cap = Number(capital),
+    pct = Number(risk);
+  const capOk = capital !== "" && Number.isFinite(cap) && cap >= min;
+  const riskOk = risk !== "" && Number.isFinite(pct) && pct >= minRisk && pct <= maxRisk;
+  const changed = state && (cap !== state.capital || pct !== state.risk_pct);
+  async function save(event) {
+    event.preventDefault();
+    if (saving || !state) return;
+    if (!capOk) return setError(`Capital must be at least ₹${number(min, 0)}.`);
+    if (!riskOk) return setError(`Risk must be ${minRisk}-${maxRisk}% of capital per trade.`);
+    setSaving(true);
+    setError("");
+    setSaved("");
+    try {
+      const body = {};
+      if (cap !== state.capital) body.capital = Math.round(cap);
+      if (pct !== state.risk_pct) body.risk_pct = pct;
+      const r = await fetch("/api/account", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json", "X-Trader-Token": state.token },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Unable to save.");
+      load(d);
+      setSaved("Saved. Alerts size from it on their next run.");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+  const rupees = capOk && riskOk ? Math.round((cap * pct) / 100) : null;
+  const tenLosers = riskOk ? Math.round((1 - (1 - pct / 100) ** 10) * 100) : null;
+  return (
+    <section className="panel alert-switches account-capital">
+      <div className="panel-head">
+        <h2>Capital and risk</h2>
+        <span className="micro">APPLIES TO EVERY ALERT STREAM</span>
+      </div>
+      {error && (
+        <p className="notice error" role="alert">
+          {error}
+        </p>
+      )}
+      {!state ? (
+        !error && <p>Reading capital…</p>
+      ) : (
+        <form className="capital-form" onSubmit={save}>
+          <div>
+            <b>Sizing for stocks, index options and gold</b>
+            <small>
+              Capital from {state.capital_source}; risk from {state.risk_source}. Minimum capital ₹
+              {number(min, 0)}; risk {minRisk}-{maxRisk}% per trade.
+            </small>
+            {rupees !== null && (
+              <small>
+                Loss at the stop, including charges: <b>₹{number(rupees, 0)}</b> per trade
+              </small>
+            )}
+            {riskOk && pct > PRO_RISK_PCT && (
+              <small className="alert-switch-note">
+                {pct}% is above the {PRO_RISK_PCT}% most professionals use: 10 losers in a row, normal for any
+                strategy, would cost about {tenLosers}% of the capital.
+              </small>
+            )}
+            {saved && <small className="capital-saved">{saved}</small>}
+          </div>
+          <div className="capital-controls">
+            <label className="capital-field">
+              <span>Capital ₹</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                min={min}
+                step="1000"
+                value={capital}
+                aria-invalid={!capOk}
+                onChange={(e) => {
+                  setCapital(e.target.value);
+                  setSaved("");
+                }}
+              />
+            </label>
+            <label className="capital-field risk">
+              <span>Risk %</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min={minRisk}
+                max={maxRisk}
+                step="0.1"
+                value={risk}
+                aria-invalid={!riskOk}
+                onChange={(e) => {
+                  setRisk(e.target.value);
+                  setSaved("");
+                }}
+              />
+            </label>
+            <button type="submit" className="capital-save" disabled={saving || !capOk || !riskOk || !changed}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </form>
+      )}
+    </section>
+  );
+}
+
 function AlertSwitches() {
   const [state, setState] = useState(null),
     [error, setError] = useState(""),
@@ -407,6 +547,7 @@ export default function AlertTrades({ refreshToken }) {
           </p>
         </div>
       </div>
+      <AccountCapital />
       <AlertSwitches />
       {error && (
         <p className="notice error" role="alert">

@@ -878,7 +878,7 @@ class Desk(unittest.TestCase):
                       global_loader=lambda now: {'S&P 500': -1.3, 'Crude': 0.4})
             doc, texts = F.tick(base, at(9, 6), **kw)
             self.assertIn('Global: S&P 500 -1.3% · Crude +0.4% → risk-off overnight', texts[0])
-            self.assertIn('📒 Desk: no closed trades yet · risk today ₹1,000 per trade (full size)', texts[0])
+            self.assertIn('📒 Desk: no closed trades yet · capital ₹1,00,000 · risk today ₹1,000 per trade (full size)', texts[0])
             self.assertIn('One trade at a time, one loss and done', texts[0])
             self.assertEqual(len(texts), 1)
             self.assertIn('Index options desk', texts[0])
@@ -1039,6 +1039,149 @@ class DashboardSwitch(unittest.TestCase):
             with post({'name': 'index_fno', 'enabled': True}) as r:
                 self.assertTrue({s['name']: s['enabled'] for s in json.load(r)['switches']}['index_fno'])
             self.assertTrue(S.read(Path(d) / 'state' / S.FILENAME)['index_fno'])
+
+
+class Account(unittest.TestCase):
+    def test_parse_and_minimum(self):
+        from india import account as A
+        self.assertEqual([A.parse_capital(v) for v in (5000, '5k', '50,000', '₹1.5L', '2 lakh', '25k', 5000.4)],
+                         [5000, 5000, 50000, 150000, 200000, 25000, 5000])
+        for bad in (4999, '4.9k', 'abc', True, None, float('nan')):
+            with self.assertRaises(ValueError):
+                A.parse_capital(bad)
+        self.assertEqual(A.risk_for(50000), 500)
+        self.assertEqual([A.parse_risk(v) for v in (1.5, '2%', ' 0.5 ', 5)], [1.5, 2.0, 0.5, 5.0])
+        self.assertEqual(A.parse_risk('₹750', 50000), 1.5)
+        for bad in (0.05, 6, '1500', 'abc', True):
+            with self.assertRaises(ValueError):
+                A.parse_risk(bad)
+        with self.assertRaises(ValueError):
+            A.parse_risk('₹750')                                                    # rupees need a capital
+        self.assertIsNone(A.warning(2.0))
+        self.assertIn('a run of 10 losers, normal for any strategy, costs about 26% of the capital', A.warning(3.0))
+
+    def test_risk_alone_capital_alone_and_both(self):
+        from india import account as A
+        with tempfile.TemporaryDirectory() as d:
+            conf = Path(d) / 'picks.json'
+            conf.write_text(json.dumps({'state_dir': str(Path(d) / 'state' / 'picks'), 'capital': 200000,
+                                        'risk_per_trade': 1000}))
+            path = Path(d) / 'state' / A.FILENAME
+            A.write(path, risk_pct=2)                                                # config capital, 2%
+            cfg = P.load_config(str(conf))
+            self.assertEqual((cfg['capital'], cfg['risk_per_trade'], cfg['gold']['risk_per_trade']), (200000, 4000, 4000))
+            A.write(path, capital=50000)                                             # keeps 2%
+            self.assertEqual(P.load_config(str(conf))['risk_per_trade'], 1000)
+            self.assertEqual(A.read(path)['risk_pct'], 2.0)
+            A.write(path, risk_pct='₹250')                                           # rupees -> % of the saved capital
+            self.assertEqual((A.read(path)['risk_pct'], P.load_config(str(conf))['risk_per_trade']), (0.5, 250))
+            with self.assertRaises(ValueError):
+                A.write(path, risk_pct=9)
+            self.assertEqual(A.read(path)['risk_pct'], 0.5)                          # a bad value changes nothing
+            d2 = A.describe(path, dict(capital=200000, risk_per_trade=1000))
+            self.assertEqual((d2['capital'], d2['risk_pct'], d2['risk_per_trade']), (50000, 0.5, 250))
+            self.assertEqual(A.describe(Path(d) / 'none.json', dict(capital=200000, risk_per_trade=1000))['risk_pct'], 0.5)
+
+    def test_saved_capital_sizes_every_stream_from_the_config_file(self):
+        from india import account as A
+        with tempfile.TemporaryDirectory() as d:
+            conf = Path(d) / 'picks.json'
+            conf.write_text(json.dumps({'state_dir': str(Path(d) / 'state' / 'picks')}))
+            cfg = P.load_config(str(conf))
+            self.assertEqual((cfg['capital'], cfg['risk_per_trade']), (100000, 1000))      # config decides when unset
+            A.write(Path(d) / 'state' / A.FILENAME, '2.5L')
+            cfg = P.load_config(str(conf))
+            self.assertEqual((cfg['capital'], cfg['risk_per_trade']), (250000, 2500))
+            self.assertEqual((cfg['gold']['capital'], cfg['gold']['risk_per_trade']), (250000, 2500))
+            self.assertIsNone(cfg['index_fno']['risk_per_trade'])                         # follows the picks risk
+            self.assertEqual(P.load_config(None)['capital'], 100000)                      # no file: defaults only
+            (Path(d) / 'state' / A.FILENAME).write_text('{"capital": 500}')               # below the minimum: ignored
+            self.assertEqual(P.load_config(str(conf))['capital'], 100000)
+
+    def test_option_premium_must_fit_the_capital(self):
+        rec, _ = run(RANGE + [BREAKOUT], at(9, 36), ctx=context())
+        lots = rec['signal']['option']['lots']
+        c = cfg()
+        c['_capital'] = 20000
+        vix = [candle(9, 15, 13.0, 13.0, 13.0, 13.0, symbol='INDEX:INDIA VIX')]
+        rec2 = {}
+        F.process('NIFTY 50', rec2, RANGE + [BREAKOUT], vix, at(9, 36), OPEN, c, ctx=context(),
+                  market=O.ModelChain(c, DEFAULT_CALENDAR, 13.0), calendar=DEFAULT_CALENDAR)
+        opt = rec2['signal']['option']
+        self.assertGreater(lots, opt['lots'])
+        self.assertLessEqual(opt['net'] * opt['lot'] * opt['lots'], 20000)
+        c['_capital'] = 10000                                                             # 1 lot ≈ ₹15,900 of premium
+        rec3 = {}
+        F.process('NIFTY 50', rec3, RANGE + [BREAKOUT], vix, at(9, 36), OPEN, c, ctx=context(),
+                  market=O.ModelChain(c, DEFAULT_CALENDAR, 13.0), calendar=DEFAULT_CALENDAR)
+        if rec3['status'] == 'SKIPPED_OPTION':
+            self.assertIn('more than the ₹10,000 capital', rec3['note'])
+        else:
+            o = rec3['signal']['option']
+            self.assertLessEqual(o['net'] * o['lot'] * o['lots'], 10000)
+
+    def test_telegram_capital_command(self):
+        from india import account as A
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / A.FILENAME
+            cfg = dict(G.settings(None), _account_path=str(path), _picks=dict(capital=100000, risk_per_trade=1000))
+            self.assertIn('Capital ₹100,000</b> · risk per trade ₹1,000', G.handle_command('/capital', cfg, at(10, 0))[0])
+            reply = G.handle_command('/capital 50,000', cfg, at(10, 0))[0]
+            self.assertIn('✅ 💼 <b>Capital ₹50,000</b> · risk per trade ₹500 (1%)', reply)
+            self.assertEqual(A.read(path)['capital'], 50000)
+            self.assertIn('at least ₹5,000', G.handle_command('/capital 4000', cfg, at(10, 0))[0])
+            self.assertEqual(A.read(path)['capital'], 50000)
+            self.assertIn('/capital 50000', G.HELP)
+            self.assertIn('/risk 1.5', G.HELP)
+            reply = G.handle_command('/risk 2', cfg, at(10, 0))[0]
+            self.assertIn('risk per trade ₹1,000 (2%)', reply)
+            self.assertNotIn('⚠️', reply)
+            self.assertIn('⚠️ 3% a trade is above the 2%', G.handle_command('/risk 3%', cfg, at(10, 0))[0])
+            self.assertIn('risk per trade ₹750 (1.5%)', G.handle_command('/risk ₹750', cfg, at(10, 0))[0])
+            self.assertIn('Risk must be 0.1-5%', G.handle_command('/risk 10', cfg, at(10, 0))[0])
+            self.assertEqual(A.read(path)['risk_pct'], 1.5)
+
+    def test_dashboard_capital_api(self):
+        from dashboard.__main__ import handler
+        from india import account as A
+        with tempfile.TemporaryDirectory() as d:
+            picks = Path(d) / 'state' / 'picks'
+            try:
+                server = ThreadingHTTPServer(('127.0.0.1', 0), handler(Path(d), picks_dir=picks))
+            except PermissionError:
+                self.skipTest('Sandbox disallows loopback sockets')
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            base = 'http://127.0.0.1:%d' % server.server_port
+            with urllib.request.urlopen(base + '/api/account') as r:
+                view = json.load(r)
+            self.assertEqual((view['min_capital'], view['min_risk_pct'], view['max_risk_pct']), (5000, 0.1, 5.0))
+
+            def post(body, token=view['token'], origin=base):
+                req = urllib.request.Request(base + '/api/account', data=json.dumps(body).encode(), method='POST',
+                                             headers={'Content-Type': 'application/json', 'X-Trader-Token': token,
+                                                      'Origin': origin})
+                return urllib.request.urlopen(req)
+            for body, kwargs, code in (({'capital': 50000}, dict(token='wrong'), 403),
+                                       ({'capital': 50000}, dict(origin='http://evil.example'), 403),
+                                       ({'capital': 4000}, {}, 409), ({'capital': 50000, 'x': 1}, {}, 409),
+                                       ({'risk_pct': 7}, {}, 409), ({}, {}, 409)):
+                with self.assertRaises(urllib.error.HTTPError) as e:
+                    post(body, **kwargs)
+                self.assertEqual(e.exception.code, code)
+                e.exception.close()
+            with post({'capital': 75000}) as r:
+                saved = json.load(r)
+            self.assertEqual((saved['capital'], saved['risk_per_trade'], saved['capital_source']), (75000, 750, 'dashboard or Telegram'))
+            self.assertEqual(A.read(Path(d) / 'state' / A.FILENAME)['capital'], 75000)
+            with post({'risk_pct': 2.5}) as r:
+                saved = json.load(r)
+            self.assertEqual((saved['risk_pct'], saved['risk_per_trade']), (2.5, 1875))
+            self.assertIn('above the 2%', saved['warning'])
+            with post({'capital': 100000, 'risk_pct': 0.5}) as r:
+                saved = json.load(r)
+            self.assertEqual((saved['capital'], saved['risk_per_trade'], saved['warning']), (100000, 500, None))
 
 
 if __name__ == '__main__':

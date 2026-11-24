@@ -13,7 +13,7 @@ from india.team import (ARTIFACTS, REQUIRED, VERDICTS, _source_check, load_sessi
 from .opportunities import OpportunityStore
 from .research import ResearchStore
 from .journal import paper_journal
-from india import alert_switches
+from india import account, alert_switches
 from india.picks import ledger as alert_ledger, load_config as picks_config
 from .runner import CodexRunner, RunnerError
 
@@ -168,6 +168,20 @@ def handler(root, workspace=None, runner=None, picks_dir=None):
     def switch_file():
         state=picks_dir or picks_state_dir()
         return Path(state).parent/alert_switches.FILENAME
+    def account_file():
+        state=picks_dir or picks_state_dir()
+        return Path(state).parent/account.FILENAME
+    def config_money():
+        """capital and risk_per_trade from config/picks.json itself, before the saved account."""
+        config=REPO/'config'/'picks.json'
+        try:
+            user=json.loads(config.read_text()) if config.is_file() else {}
+        except (OSError,ValueError):
+            user={}
+        from india.picks import DEFAULTS
+        return dict(capital=user.get('capital',DEFAULTS['capital']),risk_per_trade=user.get('risk_per_trade',DEFAULTS['risk_per_trade']))
+    def account_view():
+        return dict(account.describe(account_file(),config_money()),token=switch_token)
     class Handler(BaseHTTPRequestHandler):
         def local_host(self):
             return self.headers.get('Host','') in ('127.0.0.1:'+str(self.server.server_port),'localhost:'+str(self.server.server_port))
@@ -195,6 +209,8 @@ def handler(root, workspace=None, runner=None, picks_dir=None):
                     self.respond(200,paper_journal(workspace));return
                 if url=='/api/alert-switches':
                     self.respond(200,switches_view(switch_file(),switch_token));return
+                if url=='/api/account':
+                    self.respond(200,account_view());return
                 if url=='/api/alert-trades':
                     self.respond(200,alert_ledger(picks_dir or picks_state_dir(),picks_settings()));return
                 if url=='/api/sessions': self.respond(200,dict(sessions=sessions(root)));return
@@ -221,6 +237,8 @@ def handler(root, workspace=None, runner=None, picks_dir=None):
             supplied = self.headers.get('X-Trader-Token','')
             if urlsplit(self.path).path=='/api/alert-switches':
                 self.switch(origin,supplied);return
+            if urlsplit(self.path).path=='/api/account':
+                self.capital(origin,supplied);return
             if (not runner or self.headers.get('Origin') != origin
                     or not secrets.compare_digest(supplied,runner.token)):
                 self.respond(403,dict(error='Open the local dashboard and retry this action.'));return
@@ -265,6 +283,24 @@ def handler(root, workspace=None, runner=None, picks_dir=None):
                 self.respond(200,switches_view(switch_file(),switch_token))
             except (ValueError,OSError,TypeError) as exc:
                 self.respond(409,dict(error=str(exc) if isinstance(exc,ValueError) and not isinstance(exc,json.JSONDecodeError) else 'Could not save the alert switch.'))
+
+        def capital(self, origin, supplied):
+            if self.headers.get('Origin')!=origin or not secrets.compare_digest(supplied,switch_token):
+                self.respond(403,dict(error='Open the local dashboard and retry this action.'));return
+            if self.headers.get('Content-Type','').split(';')[0]!='application/json':
+                self.respond(415,dict(error='JSON request required'));return
+            try:
+                length=int(self.headers.get('Content-Length','0'))
+                if not 0<length<=1000:
+                    self.respond(413,dict(error='Request is too large or empty'));return
+                doc=json.loads(self.rfile.read(length))
+                if not isinstance(doc,dict) or not doc or not set(doc)<={'capital','risk_pct'}:
+                    raise ValueError('Send {"capital": 50000} and/or {"risk_pct": 1.5}')
+                account.write(account_file(),capital=doc.get('capital'),risk_pct=doc.get('risk_pct'),
+                              base_capital=config_money()['capital'])
+                self.respond(200,account_view())
+            except (ValueError,OSError,TypeError) as exc:
+                self.respond(409,dict(error=str(exc) if isinstance(exc,ValueError) and not isinstance(exc,json.JSONDecodeError) else 'Could not save the capital or risk.'))
 
         def respond(self, code, value, mime='application/json'):
             body=json.dumps(value,allow_nan=False).encode() if mime=='application/json' else value

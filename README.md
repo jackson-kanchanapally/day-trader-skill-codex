@@ -32,6 +32,8 @@ A numerical setup is separate from independent-team clearance.
 - Replay historical rules, run holdout research and inspect seeded paper scenarios when sufficient history is available.
 - Get the day's top three NSE setups with entry, exit and risk plans as a [Telegram bot alert](docs/TELEGRAM_ALERTS.md) before the open. Stocks with results that day are skipped, and each alert is paper-traded with in-session updates. `python3 -m india.picks_backtest` replays the scoring over years of history. `docker compose up -d` keeps the alerts and the dashboard running.
 - Get a morning [MCX GOLD PETAL swing alert](docs/GOLD_ALERTS.md) on the same Telegram bot from free data (COMEX gold × USD/INR, calibrated to your broker's price). Each setup has an SL-order entry, stop, T1, trailing exit and lot size, and is paper-traded. `python3 -m india.gold --backtest` measures the rules over 20 years.
+- Run a paper [NIFTY / BANK NIFTY index options desk](docs/TELEGRAM_ALERTS.md#index-options-signals) on the same bot. A 09:05 brief covers levels, VIX, ATM option Greeks and overnight global cues. Entries are 30-minute opening-range breakouts with the contract, premium and spot stop, half booked at 1R and a trailing runner. Structures are chosen with delta, gamma, theta and vega, and premiums are estimated free from India VIX. Account rules give one loss a day, a weekly stop and half size in a drawdown. It learns from every breakout after the close; its model decides only once it beats a shuffled-label luck test. `python3 -m india.index_fno_backtest` and `python3 -m india.index_fno_learn` replay the last ~60 sessions.
+- Set your [capital and risk per trade](docs/TELEGRAM_ALERTS.md#capital-and-risk) on the dashboard or with `/capital 50000` and `/risk 1.5` in the alert chat. The minimum capital is ₹5,000 and risk is 0.1–5% (default 1%, with a warning above 2%). Stock, options and gold alerts all size from them.
 - Run the [gold strategy lab](docs/GOLD_LAB.md): 21 gold strategies tested over 20 years with walk-forward checks, paper-traded forward in a tamper-evident ledger, with a champion replaced only by pre-registered rules and a monthly self-improvement pass.
 - Maintain a local SQLite paper ledger and persistent price/time alert definitions.
 - Review supplied issuer financials, dated headlines and public disclosure exports.
@@ -129,6 +131,11 @@ Open **http://127.0.0.1:8765**. A fresh workspace starts empty. **New request**
 starts research, NSE universe discovery and market-scan requests through the local Codex runner, with copying available as a fallback. Ordinary requests use the original modular workflow; independent specialists are opt-in.
 The Opportunities view lists every daily match by setup strength, with company search, setup and ORB-entry filters, pagination and CSV export. Hash-bound ORB archives show their separate cutoff and full-shortlist counts; entry expiry is recomputed at display time. Click a company for saved daily charts, indicators, score breakdown and setup evidence. Ranking is an explicit research heuristic, not a probability of profit. Standalone scanner files do not create independent team sessions. Individual research also shows saved coordinator prerequisite assessments, with separate labels and source bindings. Company details distinguish setup strength, current tradeability and risk clearance; stock research starts with a symbol, and account inputs appear when planning a paper trade. The Trading journal reads reconciled paper fills and costs from the existing ledger. See [dashboard data contracts](docs/DASHBOARD_DATA.md).
 
+The **Alert trades** page shows every Telegram alert traded on paper. It also
+has **Capital and risk**, which every alert stream sizes from, and on/off
+switches for the gold and index options streams. Changes apply on the next
+scheduler tick, without a restart.
+
 The animated desks reflect recorded lifecycle events: waiting, working, completed
 review, or attention required. Click a desk to inspect its review, engine evidence
 and sources. A completed review can still veto a setup. The UI supports mobile
@@ -207,8 +214,16 @@ existing destination; choose a new `--out PATH` for another candidate.
 
 This is research software, without demonstrated profitability or sustained
 production validation. The default strategy is long-only, cash-funded and uses
-whole shares. It has no broker transport, notification delivery, automatic broker
-reconciliation or implicit background monitoring.
+whole shares. It has no broker transport or automatic broker reconciliation.
+Telegram alerts and the `--serve` scheduler are opt-in, and every alerted
+trade is paper only.
+
+The index options desk has not shown a statistically significant edge. In a
+60-session replay its breakouts averaged about +0.15R per trade after charges,
+within about 1.5 standard errors of zero. Its learned model has not beaten a
+shuffled-label luck test, so the grade rules decide. Free-mode option premiums
+are Black-Scholes estimates from India VIX, not market quotes. At small
+capital most option trades do not fit the risk per trade and are skipped.
 
 Ticks require dated instrument-specific verification. Built-in calendar coverage
 is 2026; BSE shares the bundled calendar. Sourced exceptional windows are

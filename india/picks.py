@@ -677,6 +677,10 @@ def load_config(path):
     cfg['gold'] = gold_settings(cfg['gold'])
     from .index_fno import settings as fno_settings
     cfg['index_fno'] = fno_settings(cfg['index_fno'])
+    if path:
+        # The capital the user set on the dashboard or with /capital (var/state/account.json) wins.
+        from . import account
+        cfg = account.apply(cfg)
     return cfg
 
 

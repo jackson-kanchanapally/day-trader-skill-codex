@@ -1070,3 +1070,89 @@
   outline: 2px solid var(--success);
   outline-offset: 2px;
 }
+
+/* Trading capital */
+.capital-form {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+}
+.capital-form > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.capital-form label b {
+  font-size: 14px;
+  font-weight: 600;
+}
+.capital-form .capital-saved {
+  color: var(--success);
+}
+.capital-controls {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.capital-controls {
+  align-items: flex-end;
+}
+.capital-field {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.capital-field.risk input {
+  width: 84px;
+}
+.capital-controls input {
+  width: 140px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-raised);
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.capital-controls input[aria-invalid="true"] {
+  border-color: var(--red);
+}
+.capital-save {
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-hover);
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.capital-save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+@media (max-width: 600px) {
+  .capital-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .capital-controls {
+    flex-wrap: wrap;
+  }
+  .capital-field {
+    flex: 1;
+  }
+  .capital-controls input,
+  .capital-field.risk input {
+    width: 100%;
+    min-width: 0;
+  }
+}

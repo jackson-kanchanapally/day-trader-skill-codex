@@ -1481,6 +1481,8 @@ HELP = ('🟡 <b>Gold bot commands</b>\n'
         '/trades: paper trades and the running record\n'
         '/calibrate 12450: set the basis from the GOLDPETAL price in your broker app\n'
         '/lab: gold strategy lab, champion and forward paper scoreboard\n'
+        '/capital 50000: set your trading capital (min ₹5,000); /capital shows capital and risk\n'
+        '/risk 1.5: risk per trade as % of capital (0.1-5%, default 1%), or /risk ₹750\n'
         '/help: this list')
 
 
@@ -1536,6 +1538,31 @@ def handle_command(text, cfg, now, fetch_quote=None):
     cmd, _, arg = text.strip().partition(' ')
     cmd = cmd.split('@')[0].lower()
     try:
+        if cmd == '/capital':
+            from . import account
+            path = cfg.get('_account_path')
+            if not path:
+                return ['Capital settings are unavailable here.']
+            if arg.strip():
+                try:
+                    account.write(path, capital=arg, source='telegram')
+                except ValueError as exc:
+                    return ['⚠️ %s. Example: <code>/capital 50000</code>' % html.escape(str(exc))]
+                return ['✅ ' + account.text(path, cfg.get('_picks')) + '\nAll alert streams size from it from the next run.']
+            return [account.text(path, cfg.get('_picks'))]
+        if cmd == '/risk':
+            from . import account
+            path = cfg.get('_account_path')
+            if not path:
+                return ['Risk settings are unavailable here.']
+            if arg.strip():
+                try:
+                    account.write(path, risk_pct=arg, source='telegram',
+                                  base_capital=(cfg.get('_picks') or {}).get('capital'))
+                except ValueError as exc:
+                    return ['⚠️ %s. Example: <code>/risk 1.5</code>' % html.escape(str(exc))]
+                return ['✅ ' + account.text(path, cfg.get('_picks')) + '\nAll alert streams size from it from the next run.']
+            return [account.text(path, cfg.get('_picks'))]
         if cmd == '/price':
             return [price_text(cfg, now, fetch_quote)]
         if cmd == '/trades':
@@ -1607,6 +1634,14 @@ def _scratch_copy(state_dir):
     return str(target)
 
 
+def _config_only(path):
+    """capital and risk_per_trade from the config file itself, without the saved account."""
+    with open(path) as fh:
+        user = json.load(fh)
+    return dict(capital=user.get('capital', P.DEFAULTS['capital']),
+                risk_per_trade=user.get('risk_per_trade', P.DEFAULTS['risk_per_trade']))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description='MCX GOLD PETAL swing setups to Telegram (research only, free data).')
     ap.add_argument('--config', help='picks JSON with a "gold" object (see config/picks.example.json)')
@@ -1649,7 +1684,10 @@ def main(argv=None):
         if a.commands:
             if a.dry_run:
                 return 0            # polling consumes updates; a dry run must not
-            answered = poll_commands(cfg, now, token, chat)
+            from . import account
+            answered = poll_commands(dict(cfg, _account_path=str(account.path_for(full)),
+                                          _picks=P.load_config(None) if not a.config else _config_only(a.config)),
+                                     now, token, chat)
             if answered:
                 log('gold: answered %d command(s)' % answered)
             return 0
