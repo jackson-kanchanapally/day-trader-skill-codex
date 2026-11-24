@@ -640,6 +640,41 @@ python3 -m india.index_fno --config config/picks.json --dry-run
 python3 -m india.index_fno --config config/picks.json --dry-run --as-of 2026-11-23T09:06:00+05:30
 ```
 
+**Walk-forward learning (paper).** `python3 -m india.index_fno_learn --config
+config/picks.json` replays the last ~60 sessions oldest first. Each decision
+sees only candles known at that moment, every breakout is paper-traded to its
+exit, and a small logistic model trained only on earlier days decides TAKE
+(P(win) ≥ `--threshold`, 0.55) or SKIP, then learns from the day after the
+close. The report lists every trade, compares the model with every breakout
+and the grade rule on the same days, and runs a shuffled-label control: when
+more than ~5% of shuffled runs do as well, the model has learned noise. The
+result is saved to `var/state/index_fno/learn-latest.json`.
+
+**Learning memory (the desk decides with it).** `--seed` stores those
+breakouts in `var/state/index_fno/learning/dataset.jsonl` and trains
+`model.json`. From then on:
+
+- At each breakout the live desk asks the model for P(win). With
+  `index_fno.learning: "decide"` (default) it trades only at
+  `learn_threshold` (0.55) or above, once the model has learned from
+  `learn_min_trades` (25) breakouts; the grade and the <1R level rule become
+  notes. Risk per trade, the daily loss cap, VIX, event days and the option
+  checks still apply. Alerts add a 🧠 line; a model skip says whether the
+  grade rule would have taken the trade. `"advise"` only shows P(win);
+  `"off"` ignores the model.
+- 25 minutes after the square-off `--serve` runs
+  `python3 -m india.index_fno_learn --update`: the session is replayed from
+  Yahoo five-minute candles (else the recorder's), every breakout is stored
+  with its outcome, whether it was taken or not (so the model also learns
+  from its skips), the model is retrained and a 🧠 note is sent. It refuses
+  to learn a session that has not finished.
+- `--report` re-runs the walk-forward test over everything in memory, with the
+  live model's record (taken vs skipped). Keep `var/` backed up: it is the
+  memory.
+
+The first model did not beat chance (see above), so treat its decisions as an
+experiment that this record will confirm or reject.
+
 **Daily risk.** At most `max_open_trades` (1) options trade is open at a time
 across NIFTY and BANKNIFTY. Realised losses plus the risk of open trades stay
 within `max_daily_loss`; when that is null, the cap is 2 × the options

@@ -103,9 +103,12 @@ DEFAULTS = dict(
     send_skips=True,         # one line when a breakout is not traded, with the reason
     event_dates=[],          # YYYY-MM-DD: RBI policy, budget, results of heavyweights...
     contracts={},            # per-index overrides of CONTRACTS
+    learning='decide',       # decide | advise | off: the model learned from past breakouts (india/index_fno_learn.py)
+    learn_threshold=0.55,    # with "decide": take a breakout when the model's P(win) is at least this
+    learn_min_trades=25,     # below this many learned breakouts the grade rules decide
 )
 FINAL = frozenset(('NO_RANGE', 'SKIPPED_RANGE', 'SKIPPED_VIX', 'SKIPPED_EVENT', 'SKIPPED_WEAK', 'SKIPPED_OPTION',
-                   'SKIPPED_RISK',
+                   'SKIPPED_RISK', 'SKIPPED_MODEL',
                    'NO_BREAKOUT', 'MISSED', 'CLOSED'))
 SETTLE = dt.timedelta(minutes=3)      # wait this long after a window for the recorder to finalize it
 
@@ -180,6 +183,14 @@ def settings(value=None):
             _positive(cfg, key, 1e7)
     if cfg['max_open_trades'] not in (1, 2, 3):
         raise ValueError('index_fno.max_open_trades must be 1, 2 or 3')
+    if cfg['learning'] not in ('decide', 'advise', 'off'):
+        raise ValueError('index_fno.learning must be "decide", "advise" or "off"')
+    v = cfg['learn_threshold']
+    if not isinstance(v, (int, float)) or isinstance(v, bool) or not 0.3 <= v <= 0.9:
+        raise ValueError('index_fno.learn_threshold must be a number from 0.3 to 0.9')
+    v = cfg['learn_min_trades']
+    if not isinstance(v, int) or isinstance(v, bool) or not 10 <= v <= 1000:
+        raise ValueError('index_fno.learn_min_trades must be a whole number from 10 to 1000')
     if cfg['chain_source'] not in ('model', 'upstox'):
         raise ValueError('index_fno.chain_source must be "model" (free) or "upstox"')
     if not isinstance(cfg['send_skips'], bool):
@@ -360,6 +371,64 @@ def assess(side, entry, risk, candle, rng, ctx, vix, summary, cfg):
             score -= 10
             why.append('PCR %.2f disagrees' % pcr)
     return max(0, min(100, score)), why, blockers
+
+
+def signal_features(name, side, entry, risk, candle, rng, ctx, vix, vix_known, candles, opening, start, summary):
+    """Numbers describing a breakout from what was known at its close only (for learning which setups work)."""
+    sign = 1 if side == 'BUY' else -1
+    ctx = ctx or {}
+    first = next((x for x in candles if _t(x['time']) >= opening), None)
+    day_open = first.get('open') if first else None
+    prev = ctx.get('close')
+    atr = ctx.get('atr')
+    width = rng['high'] - rng['low']
+    span = _price(candle, 'high') - _price(candle, 'low')
+    body = (candle['close'] - candle['open']) if candle.get('open') is not None else 0.0
+    ahead = levels_ahead(side, entry, ctx or None, summary)
+    trend = ctx.get('trend')
+    vix_open = vix_known[0].get('open') if vix_known and vix_known[0].get('open') else None
+    return dict(
+        trend_aligned=0.0 if trend not in ('up', 'down') else (1.0 if (trend == 'up') == (side == 'BUY') else -1.0),
+        cpr_pct=float(ctx.get('cpr_pct') or 0.0),
+        range_pct=float(rng['width_pct']),
+        vix=float(vix or 0.0),
+        vix_change_pct=round((vix / vix_open - 1) * 100, 3) if vix and vix_open else 0.0,
+        candle_body=round(sign * body / span, 3) if span > 0 else 0.0,
+        room_r=round(min(5.0, abs(ahead[0][0] - entry) / risk), 3) if ahead else 5.0,
+        minutes_after_range=round((start - _t(rng['end'])).total_seconds() / 60, 1),
+        gap_pct=round(sign * (day_open - prev) / prev * 100, 3) if day_open and prev else 0.0,
+        move_from_open_atr=round(sign * (entry - day_open) / atr, 3) if day_open and atr else 0.0,
+        atr_pct=round(atr / prev * 100, 3) if atr and prev else 0.0,
+        extension=round(sign * (entry - (rng['high'] if side == 'BUY' else rng['low'])) / width, 3) if width else 0.0,
+        is_buy=1.0 if side == 'BUY' else 0.0,
+        is_bank=1.0 if name == 'NIFTY BANK' else 0.0,
+    )
+
+
+def learning_dir(fno):
+    return Path(fno['state_dir']) / 'learning'
+
+
+def load_model(fno):
+    """The learned model (index_fno_learn writes it after each session), or None when off, missing or too young."""
+    if fno['learning'] == 'off':
+        return None
+    path = learning_dir(fno) / 'model.json'
+    try:
+        m = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(m, dict) or (m.get('trained_on') or 0) < fno['learn_min_trades'] \
+            or len(m.get('w') or []) != len(m.get('features') or []) + 1:
+        return None
+    return m
+
+
+def model_p(m, features):
+    """P(win) for a breakout from the saved logistic weights (standardised features)."""
+    z = m['w'][0] + sum(w * ((features.get(k) or 0.0) - mu) / (sd or 1.0)
+                        for w, k, mu, sd in zip(m['w'][1:], m['features'], m['mu'], m['sd']))
+    return 1 / (1 + math.exp(-max(-30.0, min(30.0, z))))
 
 
 def grade(score):
@@ -620,6 +689,13 @@ def signal_text(name, sig, opt, cfg, rng, opening, range_end, warning):
             opening.strftime('%H:%M'), range_end.strftime('%H:%M'), _num(rng['low']), _num(rng['high']),
             _num(sig['entry']), ' · '.join(html.escape(w) for w in sig['why']), html.escape(sig['regime'])),
     ]
+    if sig.get('p_win') is not None:
+        if sig.get('decided_by') == 'model':
+            role = 'decides (take at %.2f+)%s' % (cfg['learn_threshold'], '' if sig.get('rules_take') else
+                                                  '; the grade rule alone would have skipped')
+        else:
+            role = 'advisory only'
+        lines.append('🧠 Learned model: P(win) %.2f from %d past breakouts · %s' % (sig['p_win'], sig['model_trades'], role))
     gk = opt.get('greeks')
     if gk:
         lines += greeks_lines(gk, opt['option_type'], c['short'])
@@ -653,7 +729,8 @@ def process(name, rec, candles, vix, now, opening, cfg, ctx=None, market=None, c
 
     def skip(status, note):
         rec.update(status=status, note=note)
-        if cfg['send_skips'] and status in ('SKIPPED_WEAK', 'SKIPPED_OPTION', 'SKIPPED_VIX', 'SKIPPED_RISK'):
+        if cfg['send_skips'] and status in ('SKIPPED_WEAK', 'SKIPPED_OPTION', 'SKIPPED_VIX', 'SKIPPED_RISK',
+                                            'SKIPPED_MODEL'):
             texts.append('⚪ <b>%s: breakout not traded</b> · %s IST\n%s' % (
                 label, now.strftime('%H:%M'), html.escape(note)))
 
@@ -716,11 +793,25 @@ def process(name, rec, candles, vix, now, opening, cfg, ctx=None, market=None, c
                     summary = None
             score, why, blockers = assess(side, entry, risk, x, rng, ctx, level, summary, cfg)
             t1, t2, capped = targets(side, entry, risk, ctx, summary, cfg)
+            features = signal_features(name, side, entry, risk, x, rng, ctx, level, known, candles, opening, start,
+                                       summary)
+            model = cfg.get('_model')
+            p_win = round(model_p(model, features), 3) if model else None
+            rules_take = not blockers and score >= cfg['min_score']
+            by_model = p_win is not None and cfg['learning'] == 'decide' 
             base = dict(side=side, time=end.isoformat(), entry=entry, stop=stop, initial_stop=stop,
                         risk=round(risk, 2), target1=t1, target2=t2, t2_level=capped, vix=level, score=score,
-                        grade=grade(score), why=why, regime=regime_text, summary=summary)
+                        grade=grade(score), why=why, regime=regime_text, summary=summary, features=features,
+                        p_win=p_win, model_trades=model['trained_on'] if model else None,
+                        decided_by='model' if by_model else 'rules', rules_take=rules_take)
             base['blockers'] = blockers
-            if (blockers and not cfg.get('_ignore_blockers')) or score < cfg['min_score']:
+            if by_model and p_win < cfg['learn_threshold']:
+                rec['signal'] = base
+                skip('SKIPPED_MODEL', '%s grade %s: learned model P(win) %.2f is below %.2f (from %d past breakouts)%s' % (
+                    side, grade(score), p_win, cfg['learn_threshold'], model['trained_on'],
+                    '; the grade rule alone would have taken it' if rules_take else ''))
+                break
+            if not by_model and ((blockers and not cfg.get('_ignore_blockers')) or score < cfg['min_score']):
                 rec['signal'] = base
                 skip('SKIPPED_WEAK', '%s grade %s (%d/%d): %s' % (
                     side, grade(score), score, cfg['min_score'], '; '.join(blockers + why)))
@@ -1041,6 +1132,7 @@ def tick(cfg, now, calendar=None, candle_loader=None, context_loader=None, marke
     With `tagged`, texts are (index or None, kind, text) for the outbox.
     `backfill_loader(name, day, now)` fills recorder gaps (default: none)."""
     fno = dict(cfg['index_fno'], _budget=cfg['index_fno']['risk_per_trade'] or cfg['risk_per_trade'])
+    fno['_model'] = load_model(fno)
     calendar = calendar or DEFAULT_CALENDAR
     hours = calendar.hours(now.date(), 'NSE')
     if not hours:

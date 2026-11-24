@@ -1,6 +1,7 @@
 """Alert switches, the index options desk (grading, structure, management) and its gating; no network."""
 import datetime as dt
 import json
+import math
 from pathlib import Path
 import tempfile
 import threading
@@ -427,6 +428,198 @@ class Backtest(unittest.TestCase):
         self.assertEqual((trade['index'], trade['side'], trade['exit']), ('NIFTY 50', 'BUY', 'TIME_STOP'))
         self.assertAlmostEqual(trade['spot_r'], 0.1)
         self.assertIn('LIVE RULES', B.format_report(rep))
+        from india import index_fno_learn as L
+        by_day = L.collect(cfg, [DAY], daily, intraday, DEFAULT_CALENDAR)
+        (day, trades), = by_day
+        self.assertEqual(len(trades), 1)
+        feats = trades[0]['features']
+        self.assertEqual(set(feats), set(L.FEATURES))
+        self.assertEqual((feats['is_buy'], feats['is_bank'], feats['trend_aligned']), (1.0, 0.0, 0.0))
+        self.assertEqual(feats['minutes_after_range'], 0.0)                  # first candle after the 09:15-09:30 range
+
+    def test_walk_forward_learns_only_from_earlier_days(self):
+        import random
+        from india import index_fno_learn as L
+        rng = random.Random(1)
+        by_day = []
+        for i in range(60):
+            day = dt.date(2026, 8, 1) + dt.timedelta(days=i)
+            trades = []
+            for _ in range(2):
+                f = {k: rng.gauss(0, 1) for k in L.FEATURES}
+                win = int(f['trend_aligned'] + 0.5 * rng.gauss(0, 1) > 0)      # a learnable pattern
+                trades.append(dict(date=day.isoformat(), features=f, win=win, r=0.5 if win else -0.5, rule_take=True))
+            by_day.append((day, trades))
+        ledger = L.walk(by_day, warmup=20)
+        self.assertEqual([t['trained_on'] for t in ledger], [2 * (i // 2) for i in range(len(ledger))])
+        self.assertEqual({t['decision'] for t in ledger[:20]}, {'WARMUP'})
+        res = L.evaluate(ledger, 1000)
+        self.assertGreater(res['prediction']['accuracy'], 70)
+        self.assertLess(res['prediction']['brier'], res['prediction']['base_brier'])
+        self.assertGreater(res['model']['avg_r'], res['model_skipped']['avg_r'])
+        self.assertEqual(L.shuffled_control(by_day, 20, 0.55, 1.0, res['model']['avg_r'], n=10)['p_value'], 0.0)
+        # Tomorrow's outcomes must not change today's predictions.
+        flipped = by_day[:30] + [(d, [dict(t, win=1 - t['win']) for t in ts]) for d, ts in by_day[30:]]
+        self.assertEqual([t['p_win'] for t in L.walk(flipped, warmup=20)[:62]], [t['p_win'] for t in ledger[:62]])
+        self.assertIn('model TAKE', L.format_report(dict(sessions=60, first='a', last='b', warmup=20, threshold=0.55,
+                                                         budget=1000, result=res, ledger=[], model=None), trades=False))
+
+
+def replay_data():
+    """One synthetic session (NIFTY breaks out up at 09:30, BANK NIFTY stays quiet) as Yahoo-shaped data."""
+    bank = [(F._t(x['time']), x['open'] * 2.5, x['high'] * 2.5, x['low'] * 2.5, x['close'] * 2.5) for x in RANGE]
+    nifty = [(F._t(x['time']), x['open'], x['high'], x['low'], x['close']) for x in RANGE + [BREAKOUT]]
+    flat = [(at(9, 35) + dt.timedelta(minutes=5 * i), 24100.0, 24130.0, 24080.0, 24110.0) for i in range(70)]
+    quiet = [(OPEN + dt.timedelta(minutes=5 * i), 60100.0, 60110.0, 60090.0, 60100.0) for i in range(3, 75)]
+    vix = [(OPEN + dt.timedelta(minutes=5 * i), 13.0, 13.0, 13.0, 13.0) for i in range(75)]
+    intraday = {'NIFTY 50': {DAY: nifty + flat}, 'NIFTY BANK': {DAY: bank + quiet}, 'INDIA VIX': {DAY: vix}}
+    bars = lambda close: [dict(date='2026-%02d-%02d' % (8 + i // 28, 1 + i % 28), open=close, high=close * 1.01,
+                               low=close * 0.99, close=close) for i in range(60)]
+    daily = {'NIFTY 50': bars(24050.0), 'NIFTY BANK': bars(60100.0), 'INDIA VIX': bars(13.0)}
+    return intraday, daily
+
+
+def fake_model(p, trained_on=100):
+    """A saved-model document whose P(win) is `p` for any breakout."""
+    from india import index_fno_learn as L
+    z = math.log(p / (1 - p))
+    return dict(features=list(L.FEATURES), w=[z] + [0.0] * len(L.FEATURES), mu=[0.0] * len(L.FEATURES),
+                sd=[1.0] * len(L.FEATURES), trained_on=trained_on, weights=[])
+
+
+def synthetic_rows(days=40, seed=1):
+    import random
+    from india import index_fno_learn as L
+    rng = random.Random(seed)
+    rows = []
+    for i in range(days):
+        day = (dt.date(2026, 8, 1) + dt.timedelta(days=i)).isoformat()
+        for name in ('NIFTY 50', 'NIFTY BANK'):
+            f = {k: rng.gauss(0, 1) for k in L.FEATURES}
+            win = int(f['trend_aligned'] + 0.5 * rng.gauss(0, 1) > 0)
+            rows.append(dict(date=day, index=name, time=day + 'T10:00:00+05:30', side='BUY', features=f, win=win,
+                             r=0.5 if win else -0.5, rule_take=True, exit='TIME_STOP'))
+    return rows
+
+
+class Learning(unittest.TestCase):
+    def decide(self, p, learning='decide', ctx=None):
+        c = cfg(learning=learning)
+        c['_model'] = fake_model(p)
+        rec = {}
+        vix = [candle(9, 15, 13.0, 13.0, 13.0, 13.0, symbol='INDEX:INDIA VIX')]
+        texts = F.process('NIFTY 50', rec, RANGE + [BREAKOUT], vix, at(9, 36), OPEN, c, ctx=ctx or context(),
+                          market=O.ModelChain(c, DEFAULT_CALENDAR, 13.0), calendar=DEFAULT_CALENDAR)
+        return rec, texts
+
+    def test_model_skips_a_breakout_the_grade_rule_would_take(self):
+        rec, texts = self.decide(0.40)
+        self.assertEqual(rec['status'], 'SKIPPED_MODEL')
+        self.assertIn('learned model P(win) 0.40 is below 0.55 (from 100 past breakouts)', rec['note'])
+        self.assertIn('the grade rule alone would have taken it', rec['note'])
+        self.assertTrue(texts[0].startswith('⚪'))
+        self.assertEqual(rec['signal']['decided_by'], 'model')
+
+    def test_model_takes_a_breakout_the_grade_rule_would_skip(self):
+        rec, texts = self.decide(0.70, ctx=context(trend='down', cpr_wide=True))
+        self.assertEqual(rec['status'], 'OPEN', rec.get('note'))
+        self.assertFalse(rec['signal']['rules_take'])
+        self.assertIn('🧠 Learned model: P(win) 0.70 from 100 past breakouts · decides (take at 0.55+); '
+                      'the grade rule alone would have skipped', texts[0])
+
+    def test_advise_shows_the_model_but_the_rules_decide(self):
+        rec, texts = self.decide(0.40, learning='advise')
+        self.assertEqual(rec['status'], 'OPEN')
+        self.assertIn('P(win) 0.40 from 100 past breakouts · advisory only', texts[0])
+        rec, _ = self.decide(0.90, learning='advise', ctx=context(trend='down', cpr_wide=True))
+        self.assertEqual(rec['status'], 'SKIPPED_WEAK')
+
+    def test_model_is_loaded_only_when_on_and_trained_enough(self):
+        with tempfile.TemporaryDirectory() as d:
+            fno = F.settings(dict(state_dir=d))
+            self.assertIsNone(F.load_model(fno))
+            folder = F.learning_dir(fno)
+            folder.mkdir()
+            (folder / 'model.json').write_text(json.dumps(fake_model(0.6, trained_on=10)))
+            self.assertIsNone(F.load_model(fno))                               # under learn_min_trades
+            (folder / 'model.json').write_text(json.dumps(fake_model(0.6)))
+            self.assertAlmostEqual(F.model_p(F.load_model(fno), {}), 0.6)
+            self.assertIsNone(F.load_model(dict(fno, learning='off')))
+            (folder / 'model.json').write_text('{broken')
+            self.assertIsNone(F.load_model(fno))
+
+    def test_saved_model_predicts_like_the_fitted_one(self):
+        from india import index_fno_learn as L
+        rows = synthetic_rows()
+        with tempfile.TemporaryDirectory() as d:
+            doc = L.train(d, rows)
+            m = L.Logit().fit([r['features'] for r in rows], [r['win'] for r in rows])
+            for r in rows[:5]:
+                self.assertAlmostEqual(F.model_p(doc, r['features']), m.predict(r['features']), places=9)
+            self.assertEqual(json.loads((Path(d) / 'model.json').read_text())['trained_on'], 80)
+
+    def test_seed_then_daily_update_grows_memory_and_retrains(self):
+        from india import index_fno_learn as L
+        intraday, daily = replay_data()
+        with tempfile.TemporaryDirectory() as d:
+            base = P.load_config(None)
+            base['risk_per_trade'] = 50000
+            base['index_fno'] = dict(base['index_fno'], state_dir=d)
+            rows, model = L.seed(base, report=dict(ledger=[dict(r, p_win=0.5, decision='TAKE') for r in synthetic_rows()]))
+            self.assertEqual((len(rows), model['trained_on']), (80, 80))
+            self.assertNotIn('decision', L.load_dataset(F.learning_dir(base['index_fno']))[0])
+            # The live desk traded NIFTY that day with the model deciding.
+            F.save_state(d, dict(date=DAY.isoformat(), indices={'NIFTY 50': dict(status='CLOSED', pnl=900, r=0.3, signal=dict(
+                side='BUY', time=at(9, 30).isoformat(), p_win=0.61, decided_by='model'))}))
+            with self.assertRaises(ValueError):                                # never learn a half-finished day
+                L.update(base, DAY, at(14, 0), DEFAULT_CALENDAR, intraday=intraday, daily=daily)
+            now = at(15, 45)
+            res = L.update(base, DAY, now, DEFAULT_CALENDAR, intraday=intraday, daily=daily)
+            self.assertEqual((res['added'], res['memory'], res['source']), (1, 81, 'Yahoo'))
+            (t,) = res['trades']
+            self.assertEqual((t['index'], t['live']['p_win'], t['live']['taken']), ('NIFTY 50', 0.61, True))
+            self.assertEqual(res['model']['trained_on'], 81)
+            self.assertTrue((F.learning_dir(base['index_fno']) / ('learned-%s' % DAY.isoformat())).exists())
+            self.assertEqual(L.forward_record(L.load_dataset(F.learning_dir(base['index_fno'])))['taken']['trades'], 1)
+            text = L.update_text(res, base['index_fno'])
+            self.assertIn('Options desk learned from Fri 20 Nov', text)
+            self.assertIn('NIFTY BUY 09:35 · model 0.61 → TAKEN', text)
+            self.assertIn('Memory: 81 breakouts', text)
+            self.assertIn('Live model record: taken 1', text)
+            # Learning the same day again replaces, never duplicates.
+            self.assertEqual(L.update(base, DAY, now, DEFAULT_CALENDAR, intraday=intraday, daily=daily)['memory'], 81)
+            rep = L.memory_report(base, warmup=20, shuffles=0)
+            self.assertEqual(rep['sessions'], 41)
+            self.assertIn('live model decisions: taken 1', L.format_report(rep, trades=False))
+
+    def test_serve_learns_once_after_the_square_off(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = P.load_config(None)
+            cfg['state_dir'] = str(Path(d) / 'picks')
+            cfg['index_fno'] = dict(cfg['index_fno'], state_dir=str(Path(d) / 'fno'))
+            S.write(Path(d) / S.FILENAME, 'index_fno', True)
+            stamps = iter([at(15, 30), at(15, 40), at(15, 41), at(16, 5)])
+            clock, learned = [None], []
+
+            def learn(args):
+                learned.append((clock[0].strftime('%H:%M'), args))
+                folder = Path(d) / 'fno' / 'learning'
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / ('learned-%s' % DAY.isoformat())).write_text('x')
+
+            def now_fn():
+                clock[0] = next(stamps)
+                return clock[0]
+
+            class FakeRecorder:
+                def tick(self, now): return dict(feed='indices', status='WAITING')
+                def stocks_tick(self, now): return dict(feed='stocks', status='DISABLED')
+                def close(self): pass
+            with mock.patch('india.picks.make_recorder', lambda *a, **k: FakeRecorder()):
+                P.serve(['--config', 'x.json'], cfg, DEFAULT_CALENDAR, now_fn=now_fn, sleep=lambda s: None,
+                        main_fn=lambda a: None, iterations=4, log=lambda m: None, gold_fn=lambda a: None,
+                        fno_fn=lambda a: None, learn_fn=learn)
+            self.assertEqual(learned, [('15:40', ['--config', 'x.json', '--update'])])
 
 
 class Offline(unittest.TestCase):

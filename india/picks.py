@@ -1290,7 +1290,7 @@ def internet_ok(host='api.telegram.org', timeout=5):
 
 def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=time.sleep,
           main_fn=None, iterations=None, log=lambda msg: print(msg, flush=True), recorder=None, gold_fn=None,
-          lab_fn=None, fno_fn=None, online_fn=None):
+          lab_fn=None, fno_fn=None, online_fn=None, learn_fn=None):
     """Long-running scheduler for a container: morning alert + settles every settle_minutes.
 
     The alert runs once per session between alert_time and entry_deadline on NSE
@@ -1314,7 +1314,10 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
     While the dashboard's index_fno switch is on, india.index_fno runs on every
     tick of an NSE session. It reads the recorder's index candles, so an
     indices-only recorder is started for it when recorder.enabled is false,
-    and stopped again when the switch goes off.
+    and stopped again when the switch goes off. From 25 minutes after the
+    square-off until 23:00, the desk learns from the finished session once
+    (india.index_fno_learn --update, at most 3 attempts): every breakout and
+    its outcome go into the desk's memory and the model is retrained.
     """
     main_fn = main_fn or main
     gold = cfg.get('gold') or {}
@@ -1340,6 +1343,10 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
     if fno_fn is None:
         from . import index_fno as fno_module
         fno_fn = fno_module.main
+    if learn_fn is None:
+        from . import index_fno_learn
+        learn_fn = index_fno_learn.main
+    learn_attempts = {}
     from . import alert_switches, index_fno
     switch_file = alert_switches.path_for(cfg)
     fno_recorder, fno_warned = None, False
@@ -1461,6 +1468,18 @@ def serve(base_args, cfg, calendar, now_fn=lambda: dt.datetime.now(IST), sleep=t
                 fno_fn(base_args)
             except Exception as exc:
                 log('index F&O run crashed: %r' % exc)
+        fno_cfg = cfg['index_fno']
+        if hours and fno_cfg['learning'] != 'off' and now.time() < dt.time(23, 0) \
+                and now >= dt.datetime.combine(today, hhmm(fno_cfg['square_off']), now.tzinfo) + dt.timedelta(minutes=25) \
+                and not (Path(fno_cfg['state_dir']) / 'learning' / ('learned-%s' % today.isoformat())).exists():
+            count, last = learn_attempts.get(today, (0, None))
+            if count < 3 and (last is None or now - last >= dt.timedelta(minutes=20)) and reachable('options learning'):
+                learn_attempts[today] = (count + 1, now)
+                log('%s options desk learning from today (attempt %d)' % (now.isoformat(timespec='seconds'), count + 1))
+                try:
+                    learn_fn(base_args + ['--update'])
+                except Exception as exc:
+                    log('options learning crashed: %r' % exc)
         if last_settle is None or now - last_settle >= every:
             last_settle = now
             try:
